@@ -49,6 +49,29 @@ POLL_INTERVAL = 0.05
 # the command's own startup. Better to wait than to abandon a live request.
 CLIENT_TIMEOUT = 900.0
 
+# Liveness. Without it, a client whose bridge is not running writes a request
+# into a directory nobody is watching and then waits out CLIENT_TIMEOUT -- which
+# an MCP client displays as "connecting..." forever, giving no clue what is
+# wrong. The heartbeat turns a 15-minute silent hang into an immediate,
+# actionable error.
+HEARTBEAT = ".bridge-alive"
+HEARTBEAT_INTERVAL = 5.0
+HEARTBEAT_STALE = 30.0
+# A client may legitimately start a moment before the bridge at login, so wait
+# briefly for a heartbeat before concluding it is absent.
+HEARTBEAT_WAIT = 10.0
+
+
+def heartbeat_path(base):
+    return os.path.join(base, HEARTBEAT)
+
+
+def bridge_alive(base, within=HEARTBEAT_STALE):
+    try:
+        return (time.time() - os.stat(heartbeat_path(base)).st_mtime) < within
+    except OSError:
+        return False
+
 # handle() returns None for a JSON-RPC notification, which must not be answered.
 # The bridge still writes a file so the client is never left polling for a reply
 # that is never coming; the client recognises this and emits nothing.
@@ -100,6 +123,21 @@ def client_stdio(base, vault, log=None):
     except OSError as exc:
         sys.stderr.write("sandbroker: cannot use the bridge queue at %s (%s)\n"
                          % (base, exc.strerror))
+        return 1
+
+    # Fail loudly and immediately rather than queueing into the void. An MCP
+    # client renders a hang as "connecting..." with no diagnosis; a non-zero exit
+    # with this message on stderr shows up as a failed server and says what to do.
+    deadline = time.time() + HEARTBEAT_WAIT
+    while not bridge_alive(base) and time.time() < deadline:
+        time.sleep(0.25)
+    if not bridge_alive(base):
+        sys.stderr.write(
+            "sandbroker: the broker is not reachable from here.\n"
+            "This session cannot open the broker socket (sandboxed), and no "
+            "bridge is running to relay for it.\n"
+            "Start one on the host:  systemctl --user start sandbroker-bridge\n"
+            "Check it with:          systemctl --user status sandbroker-bridge\n")
         return 1
 
     out_lock = threading.Lock()
@@ -233,7 +271,16 @@ def serve_queues(config, log, stop=None, base=None):
         except OSError as exc:
             log("could not write reply: %s" % exc)
 
+    last_beat = 0.0
     while stop is None or not stop.is_set():
+        now = time.time()
+        if now - last_beat >= HEARTBEAT_INTERVAL:
+            try:
+                with open(heartbeat_path(base), "w") as fh:
+                    fh.write(str(int(now)))
+                last_beat = now
+            except OSError:
+                pass
         idle = True
         for vault in vaults:
             req_dir, resp_dir = queue_dirs(base, vault)

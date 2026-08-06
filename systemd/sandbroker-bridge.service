@@ -9,11 +9,13 @@ After=default.target
 
 [Service]
 Type=exec
-# `sg` is needed because talking to the broker socket requires claude-broker,
-# and a systemd --user manager started before the group was granted still
-# carries the old credentials. sg re-execs with the group applied, so this works
-# without waiting for a logout.
-ExecStart=/usr/bin/sg claude-broker -c "exec /usr/local/bin/sandbroker bridge"
+# Plain exec, no `sg`. The systemd --user manager inherits the login session's
+# groups, so it already has claude-broker and can reach the sockets. Wrapping
+# this in `sg` would need setuid, which NoNewPrivileges below correctly forbids
+# -- and the wrapper was never necessary. If this ever fails with a permission
+# error on the socket, the cause is a --user manager that predates the group
+# grant: log out and back in.
+ExecStart=/usr/local/bin/sandbroker bridge
 Restart=always
 RestartSec=2
 

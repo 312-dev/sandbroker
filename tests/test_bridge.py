@@ -98,6 +98,38 @@ class TestQueueRoundTrip(unittest.TestCase):
         self.assertEqual([], [n for n in os.listdir(req_dir) if n.endswith(".json")])
 
 
+class TestHeartbeat(unittest.TestCase):
+    """Without liveness, a client whose bridge is down queues into the void and
+    waits out CLIENT_TIMEOUT, which an MCP client renders as 'connecting...'
+    forever with no diagnosis. The heartbeat makes that an immediate error."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.harness = QueueHarness(self.tmp)
+
+    def tearDown(self):
+        self.harness.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_running_bridge_is_alive(self):
+        deadline = time.time() + 10
+        while time.time() < deadline and not bridge.bridge_alive(self.harness.base):
+            time.sleep(0.1)
+        self.assertTrue(bridge.bridge_alive(self.harness.base))
+
+    def test_absent_heartbeat_reads_as_dead(self):
+        self.assertFalse(bridge.bridge_alive(os.path.join(self.tmp, "nowhere")))
+
+    def test_stale_heartbeat_reads_as_dead(self):
+        deadline = time.time() + 10
+        while time.time() < deadline and not bridge.bridge_alive(self.harness.base):
+            time.sleep(0.1)
+        path = bridge.heartbeat_path(self.harness.base)
+        old = time.time() - (bridge.HEARTBEAT_STALE + 60)
+        os.utime(path, (old, old))
+        self.assertFalse(bridge.bridge_alive(self.harness.base))
+
+
 class TestQueuePermissions(unittest.TestCase):
     def test_queue_is_owner_only(self):
         """0700 is the access control: the sandbox drops supplementary groups,
