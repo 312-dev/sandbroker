@@ -79,6 +79,11 @@ say "code"
 rm -rf "$LIB_DIR/sandbroker"
 install -d -m 0755 "$LIB_DIR/sandbroker"
 install -m 0644 "$SRC"/sandbroker/*.py "$LIB_DIR/sandbroker/"
+# Remove first rather than installing over. The proof-of-concept left $BIN as a
+# SYMLINK into its virtualenv, and writing through a symlink would silently
+# update the link's target instead of replacing the link -- leaving a working
+# command with a baffling layout that breaks the day the venv is cleaned up.
+rm -f "$BIN" /usr/local/bin/sandbroker-register-mcp
 install -m 0755 "$SRC/bin/sandbroker" "$BIN"
 # Run by the human, not by root: it edits ~/.claude.json.
 install -m 0755 "$SRC/bin/sandbroker-register-mcp" /usr/local/bin/sandbroker-register-mcp
