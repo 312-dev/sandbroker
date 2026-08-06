@@ -80,6 +80,8 @@ rm -rf "$LIB_DIR/sandbroker"
 install -d -m 0755 "$LIB_DIR/sandbroker"
 install -m 0644 "$SRC"/sandbroker/*.py "$LIB_DIR/sandbroker/"
 install -m 0755 "$SRC/bin/sandbroker" "$BIN"
+# Run by the human, not by root: it edits ~/.claude.json.
+install -m 0755 "$SRC/bin/sandbroker-register-mcp" /usr/local/bin/sandbroker-register-mcp
 chown -R root:root "$LIB_DIR"
 
 # ----------------------------------------------------------------- config ----
