@@ -18,6 +18,22 @@ from test_mcp import build  # noqa: E402
 from test_runner import SECRET  # noqa: E402
 
 
+def _unix_sockets_available():
+    """Some sandboxes (Claude Code's, for one) block socket(AF_UNIX) at the
+    seccomp layer. These tests exercise a real socket, so skip rather than fail:
+    a red suite that means "wrong environment" trains you to ignore red suites."""
+    import socket
+    try:
+        socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
+        return True
+    except OSError:
+        return False
+
+
+HAVE_UNIX = _unix_sockets_available()
+SKIP_REASON = "AF_UNIX is blocked in this environment (sandbox seccomp)"
+
+
 class QueueHarness:
     """A live daemon on a unix socket plus a bridge watching a temp queue."""
 
@@ -58,6 +74,7 @@ class QueueHarness:
         raise AssertionError("no reply within %ss" % timeout)
 
 
+@unittest.skipUnless(HAVE_UNIX, SKIP_REASON)
 class TestQueueRoundTrip(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -98,6 +115,7 @@ class TestQueueRoundTrip(unittest.TestCase):
         self.assertEqual([], [n for n in os.listdir(req_dir) if n.endswith(".json")])
 
 
+@unittest.skipUnless(HAVE_UNIX, SKIP_REASON)
 class TestConcurrency(unittest.TestCase):
     """Every request must get exactly one reply, even under load.
 
@@ -151,6 +169,7 @@ class TestConcurrency(unittest.TestCase):
                          "claimed requests were not cleaned up")
 
 
+@unittest.skipUnless(HAVE_UNIX, SKIP_REASON)
 class TestHeartbeat(unittest.TestCase):
     """Without liveness, a client whose bridge is down queues into the void and
     waits out CLIENT_TIMEOUT, which an MCP client renders as 'connecting...'
@@ -197,6 +216,7 @@ class TestQueuePermissions(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+@unittest.skipUnless(HAVE_UNIX, SKIP_REASON)
 class TestBrokerDown(unittest.TestCase):
     def test_unreachable_socket_returns_an_error_not_a_hang(self):
         tmp = tempfile.mkdtemp()

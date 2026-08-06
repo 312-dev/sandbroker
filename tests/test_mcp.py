@@ -18,6 +18,22 @@ from sandbroker.mcp import Server  # noqa: E402
 from test_runner import FakeVault, make_config, SECRET  # noqa: E402
 
 
+def _unix_sockets_available():
+    """Some sandboxes (Claude Code's, for one) block socket(AF_UNIX) at the
+    seccomp layer. These tests exercise a real socket, so skip rather than fail:
+    a red suite that means "wrong environment" trains you to ignore red suites."""
+    import socket
+    try:
+        socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
+        return True
+    except OSError:
+        return False
+
+
+HAVE_UNIX = _unix_sockets_available()
+SKIP_REASON = "AF_UNIX is blocked in this environment (sandbox seccomp)"
+
+
 class StubAlerter(Alerter):
     """Records pushes instead of sending them, so the suite never touches ntfy."""
 
@@ -178,6 +194,7 @@ class TestLeakAlerting(unittest.TestCase):
         self.assertNotIn("acknowledge", names)
 
 
+@unittest.skipUnless(HAVE_UNIX, SKIP_REASON)
 class TestSocketTransport(unittest.TestCase):
     def test_round_trip_over_the_unix_socket(self):
         tmp = tempfile.mkdtemp()
