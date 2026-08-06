@@ -1,0 +1,14 @@
+[Unit]
+Description=Keep nagging about open sandbroker leak alerts
+Documentation=https://github.com/312-dev/sandbroker
+
+[Timer]
+# A leak alert that fires once at 03:00 is a leak alert that gets missed. This is
+# what makes an alert STICKY: it keeps arriving until a human acknowledges it on
+# the host. The sweep is cheap and skips anything pushed recently.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

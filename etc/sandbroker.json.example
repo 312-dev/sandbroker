@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Installed at /opt/sandbroker/etc/sandbroker.json as root:root 0444.",
+    "It holds NO secrets: vault names, token FILENAMES, ports and paths only.",
+    "Safe for the agent to read, and reading it is how the agent learns what",
+    "vaults exist.",
+    "",
+    "bind: leave null for unix-socket-only, which is the default and the",
+    "tightest setting. Set it to a tailnet (100.64.0.0/10) or loopback address",
+    "to also expose MCP over HTTP. The daemon REFUSES any other address: the",
+    "HTTP surface is unauthenticated by design, so reachability is the whole",
+    "access control."
+  ],
+
+  "op_bin": "/usr/local/bin/op",
+  "tokens_dir": "/opt/sandbroker/var/tokens",
+  "socket_dir": "/opt/sandbroker/run",
+  "alerts_dir": "/opt/sandbroker/var/alerts",
+  "socket_group": "claude-broker",
+
+  "bind": null,
+
+  "ntfy_url": "http://100.85.183.28:8090/sandbroker-alerts",
+  "ntfy_token_file": "/opt/sandbroker/etc/ntfy.token",
+
+  "max_output_bytes": 1048576,
+  "default_timeout": 60,
+  "max_timeout": 600,
+
+  "vaults": {
+    "Dev":        {"vault": "312.dev - Dev",        "token": "Dev",        "port": 8770},
+    "Staging":    {"vault": "312.dev - Staging",    "token": "Staging",    "port": 8771},
+    "Production": {"vault": "312.dev - Production", "token": "Production", "port": 8772},
+    "Infra":      {"vault": "312.dev - Infra",      "token": "Infra",      "port": 8773}
+  }
+}

@@ -1,0 +1,50 @@
+[Unit]
+# One instance per vault: sandbroker@Dev, sandbroker@Production, ...
+# Separate processes are the isolation. Each opens exactly one service-account
+# token, so a fault in the Dev server has no path to the Production credential.
+Description=sandbroker secret broker for the %i vault
+Documentation=https://github.com/312-dev/sandbroker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=sandbroker
+Group=sandbroker
+# Needed to hand the unix socket to the claude-broker group, which is the entire
+# access control: membership in that group is permission to use the broker.
+SupplementaryGroups=claude-broker
+ExecStart=/usr/local/bin/sandbroker serve --vault %i
+Restart=always
+RestartSec=2
+
+# Hardening. The broker runs commands on behalf of an agent, so the blast radius
+# of whatever it runs is bounded here rather than trusted to the caller.
+NoNewPrivileges=yes
+# PrivateTmp is deliberate, and it costs something: a command cannot drop a file
+# in /tmp for the agent to pick up. That is the point. Everything returned to the
+# agent must come back through the redactor, and a file on disk would be a way
+# around it -- `curl -v 2>/tmp/log` would otherwise park an Authorization header
+# somewhere unscrubbed. Pipe through jq or grep inside the command instead.
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+ReadWritePaths=/opt/sandbroker/run /opt/sandbroker/var
+UMask=0077
+
+# The command it runs is arbitrary by design, so resource limits are the only
+# backstop against a runaway.
+LimitNOFILE=4096
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

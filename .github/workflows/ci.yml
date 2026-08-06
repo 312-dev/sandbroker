@@ -1,0 +1,14 @@
+name: tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # No install step: the package is standard library only, which is the
+      # point. If this ever needs a `pip install`, something has gone wrong.
+      - run: bash tests/run.sh

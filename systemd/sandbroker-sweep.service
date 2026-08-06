@@ -1,0 +1,16 @@
+[Unit]
+Description=Re-push unacknowledged sandbroker leak alerts
+Documentation=https://github.com/312-dev/sandbroker
+
+[Service]
+Type=oneshot
+User=sandbroker
+Group=sandbroker
+ExecStart=/usr/local/bin/sandbroker sweep
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/sandbroker/var
+UMask=0077

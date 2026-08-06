@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Entry point. Kept as a plain script so the install is a directory copy and a
+symlink, with no packaging step to go stale between the repo and the box."""
+import os
+import sys
+
+sys.path.insert(0, os.environ.get("SANDBROKER_LIB", "/opt/sandbroker/lib"))
+
+from sandbroker.cli import main  # noqa: E402
+
+sys.exit(main())

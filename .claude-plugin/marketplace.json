@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "sandbroker-plugins",
+  "description": "Marketplace for sandbroker: let Claude Code use secrets without ever seeing their values.",
+  "owner": {
+    "name": "Grayson Adams",
+    "url": "https://github.com/312-dev"
+  },
+  "plugins": [
+    {
+      "name": "sandbroker",
+      "source": "./plugin",
+      "description": "Use local secrets without seeing them. Adds the use-secret skill and the operating rules for the per-vault sandbroker MCP servers.",
+      "version": "1.0.0",
+      "category": "security",
+      "tags": [
+        "secrets",
+        "credentials",
+        "mcp",
+        "broker",
+        "1password"
+      ],
+      "author": {
+        "name": "Grayson Adams",
+        "url": "https://github.com/312-dev"
+      }
+    }
+  ]
+}

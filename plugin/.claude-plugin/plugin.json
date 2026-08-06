@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "sandbroker",
+  "version": "1.0.0",
+  "description": "Use local secrets without ever seeing their values. The broker injects each value into your command's environment and strips it back out of the output.",
+  "author": {
+    "name": "Grayson Adams",
+    "url": "https://github.com/312-dev"
+  },
+  "homepage": "https://github.com/312-dev/sandbroker",
+  "repository": "https://github.com/312-dev/sandbroker",
+  "license": "MIT",
+  "keywords": ["secrets", "credentials", "broker", "mcp", "1password"],
+  "_comment": [
+    "No mcpServers block on purpose. There is one server per vault and the vault",
+    "list lives in /opt/sandbroker/etc/sandbroker.json, so registering them here",
+    "would duplicate that list and drift from it. Run sandbroker-register-mcp",
+    "instead: it reads the config and writes ~/.claude.json, so the registered",
+    "servers always match the vaults that actually exist."
+  ]
+}
