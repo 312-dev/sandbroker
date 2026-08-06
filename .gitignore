@@ -1,3 +1,19 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Zero-byte placeholders the Claude Code sandbox creates as bind-mount targets
+# when an agent works in this directory. They are empty, but an empty .mcp.json
+# is reported by Claude Code as "MCP config is not a valid JSON", so they are
+# actively unhelpful as well as noise.
+.bashrc
+.bash_profile
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.ripgreprc
+.gitmodules
+.mcp.json
+.idea
+.vscode
