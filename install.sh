@@ -62,6 +62,11 @@ for unit in sandbrokerd.service sandbroker-grant-apply.path sandbroker-grant-app
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
   fi
 done
+# Its socket outlives the daemon and looks like a live listener to anyone
+# reading the directory. Only removed once nothing is listening on it.
+if [ -S "$RUN_DIR/sandbroker.sock" ] && ! systemctl is-active --quiet sandbrokerd.service; then
+  rm -f "$RUN_DIR/sandbroker.sock"
+fi
 
 # ------------------------------------------------------------------ layout --
 say "layout under $PREFIX"

@@ -8,15 +8,18 @@
 """
 
 import argparse
+import json
 import os
+import socket
 import sys
 import time
 
 from . import config as config_mod
+from . import mcp
 from . import server as server_mod
 from .alert import Alerter
 from .mcp import Server
-from .onepassword import Vault, VaultError
+from .onepassword import Vault
 
 
 def _log(stream=sys.stderr):
@@ -106,12 +109,43 @@ def cmd_alerts(args):
 
 # -- doctor -----------------------------------------------------------------
 
+def _probe(socket_path, message, timeout=20):
+    """Send one JSON-RPC message to a running daemon and return its reply.
+
+    doctor talks to the broker as a CLIENT rather than inspecting its private
+    files. That is the only honest check available to a normal user: the token
+    directory is 0700 and owned by the broker, so a non-broker uid genuinely
+    cannot tell an absent token from an unreadable one -- and guessing produces
+    a confident, wrong diagnosis.
+    """
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.settimeout(timeout)
+        conn.connect(socket_path)
+    except OSError as exc:
+        return None, exc.strerror or str(exc)
+    try:
+        conn.sendall(json.dumps(message).encode("utf-8") + b"\n")
+        line = conn.makefile("rb").readline()
+    except OSError as exc:
+        return None, exc.strerror or str(exc)
+    finally:
+        conn.close()
+    if not line:
+        return None, "no response"
+    try:
+        return json.loads(line), None
+    except ValueError:
+        return None, "unreadable response"
+
+
 def cmd_doctor(args):
     """Check the install end to end without ever resolving a value.
 
-    Everything here is metadata: file existence, socket presence, an item
-    listing. `op item list` cannot return a field value, so a green doctor run
-    proves the path works without a single secret being read.
+    Everything here is metadata: config, the op binary, a live handshake with
+    each daemon, and optionally an item listing. `op item list` cannot return a
+    field value, so a green --deep run proves the whole path works without a
+    single secret being read.
     """
     problems = 0
     try:
@@ -135,31 +169,59 @@ def cmd_doctor(args):
         print("http listener: FAIL %s" % exc)
         problems += 1
 
+    # Only meaningful when doctor happens to run as root or as the broker; from
+    # any other uid the directory is not traversable and every answer would be a
+    # false negative, so the question is not asked at all.
+    tokens_visible = os.access(cfg.tokens_dir, os.R_OK | os.X_OK)
+
     for alias in sorted(cfg.vaults):
-        token = cfg.token_file(alias)
         sock = cfg.socket_path(alias)
         bits = []
-        if not os.path.exists(token):
-            bits.append("token MISSING (%s)" % token)
-            problems += 1
-        elif not os.access(token, os.R_OK):
-            # Expected and healthy when doctor runs as you rather than as the
-            # broker user. Only the daemon should be able to read this.
-            bits.append("token present, not readable by %s (correct unless you "
-                        "are the broker user)" % os.environ.get("USER", "you"))
-        else:
-            bits.append("token readable")
-        bits.append("socket %s" % ("up" if os.path.exists(sock) else "DOWN"))
+
         if not os.path.exists(sock):
+            bits.append("socket DOWN (systemctl status sandbroker@%s)" % alias)
             problems += 1
-        if args.deep and os.access(token, os.R_OK):
-            try:
-                items = _vault(cfg, alias).list_items()
-                bits.append("%d item(s)" % len(items))
-            except VaultError as exc:
-                bits.append("1Password FAIL (%s)" % exc)
+        else:
+            reply, err = _probe(sock, {"jsonrpc": "2.0", "id": 1,
+                                       "method": "initialize",
+                                       "params": {"protocolVersion": mcp.PROTOCOL_VERSION}})
+            if err or not reply or "result" not in reply:
+                bits.append("daemon NOT RESPONDING (%s)" % (err or "bad reply"))
                 problems += 1
+            else:
+                bits.append("daemon up")
+
+        if tokens_visible:
+            bits.append("token %s"
+                        % ("present" if os.path.exists(cfg.token_file(alias))
+                           else "MISSING"))
+            if not os.path.exists(cfg.token_file(alias)):
+                problems += 1
+
+        if args.deep and os.path.exists(sock):
+            # Through the daemon, not by loading the token here: this uid cannot
+            # read it, and going through the socket is what users actually do.
+            reply, err = _probe(sock, {"jsonrpc": "2.0", "id": 2,
+                                       "method": "tools/call",
+                                       "params": {"name": "list_items",
+                                                  "arguments": {}}}, timeout=45)
+            result = (reply or {}).get("result") or {}
+            if err or result.get("isError") or "content" not in result:
+                detail = err or (result.get("content") or [{}])[0].get("text", "failed")
+                bits.append("1Password FAIL (%s)" % str(detail)[:80])
+                problems += 1
+            else:
+                try:
+                    count = len(json.loads(result["content"][0]["text"])["items"])
+                    bits.append("%d item(s)" % count)
+                except (ValueError, KeyError, IndexError):
+                    bits.append("1Password ok, unreadable listing")
+
         print("vault %-12s %s" % (alias, "; ".join(bits)))
+
+    if not tokens_visible:
+        print("\n(tokens are 0700 and owned by the broker, so this uid cannot "
+              "see them -- that is correct. `doctor --deep` proves they work.)")
 
     open_alerts = Alerter(cfg).open_alerts()
     if open_alerts:
