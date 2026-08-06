@@ -120,13 +120,53 @@ class Vault:
     def read(self, ref):
         """Resolve one ref to its value. ANY field of any item is allowed: there
         is no per-field allowlist, because a vault the agent may use is a vault
-        the agent may use."""
+        the agent may use.
+
+        Two mechanisms, because one is not enough. `op read` parses a secret
+        REFERENCE, and its parser cannot address every legal item title --
+        parentheses and colons in a title make it reject a reference for an item
+        it can otherwise read perfectly well. `op item get` looks the item up by
+        title and has no such limit, which is why list_fields (which uses it)
+        would happily advertise a reference that read then refused.
+
+        Discovery promising something resolution rejects is a bug in this file,
+        not a puzzle for the caller, so the narrow path is tried first and the
+        general one catches what it cannot express.
+        """
         item, field = self.parse_ref(ref)
         real = "op://%s/%s/%s" % (self.real_name, item, field)
-        value = self._run([self.op_bin, "read", "--no-newline", real])
+        try:
+            value = self._run([self.op_bin, "read", "--no-newline", real])
+        except VaultError:
+            value = self._read_via_item(item, field)
         if not value:
             raise VaultError("reference resolved to an empty value")
         return value
+
+    def _read_via_item(self, item, field):
+        """Fallback: fetch the item and take one field.
+
+        This pulls every field of the item into this process, where `op read`
+        would have fetched exactly one. That is a real cost and the reason it is
+        the fallback rather than the default: the extra values stay inside the
+        daemon, are never placed in a child's environment, and are never
+        returned -- but less material in memory is still better than more.
+        """
+        out = self._run([self.op_bin, "item", "get", item,
+                         "--vault", self.real_name, "--format", "json"],
+                        timeout=30)
+        try:
+            data = json.loads(out)
+        except ValueError:
+            raise VaultError("could not parse the item")
+        for entry in (data.get("fields") or []) if isinstance(data, dict) else []:
+            if entry.get("value") is None:
+                continue
+            if field in (entry.get("label"), entry.get("id")):
+                return entry["value"]
+        raise VaultError(
+            "item %r has no field %r with a value set (list_fields shows what "
+            "it does have)" % (item, field))
 
     # -- discovery (metadata only, structurally value-free) -----------------
 
@@ -142,12 +182,20 @@ class Vault:
         items = []
         for entry in data if isinstance(data, list) else []:
             title = str(entry.get("title") or "")
-            if title:
-                items.append({
-                    "title": title,
-                    "ref": "op://%s/%s" % (self.alias, title),
-                    "category": str(entry.get("category") or ""),
-                })
+            if not title:
+                continue
+            item = {
+                "title": title,
+                "ref": "op://%s/%s" % (self.alias, title),
+                "category": str(entry.get("category") or ""),
+            }
+            # The UUID is not a secret, and it is the unambiguous way to address
+            # an item whose title contains characters that make a reference
+            # awkward. Worth carrying so a caller always has a way through.
+            iid = str(entry.get("id") or "")
+            if iid:
+                item["id"] = iid
+            items.append(item)
         return sorted(items, key=lambda i: i["title"].lower())
 
     def list_fields(self, item):
