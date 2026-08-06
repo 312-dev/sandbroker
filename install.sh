@@ -121,6 +121,11 @@ say "units"
 install -m 0644 "$SRC/systemd/sandbroker@.service"      "$UNIT_DIR/"
 install -m 0644 "$SRC/systemd/sandbroker-sweep.service" "$UNIT_DIR/"
 install -m 0644 "$SRC/systemd/sandbroker-sweep.timer"   "$UNIT_DIR/"
+# A USER unit, so it goes in the system-wide user-unit directory and each human
+# enables it for themselves. It must not run as root: the queue it owns is
+# reached by uid, and that uid has to be the person running the agent.
+install -d -m 0755 /etc/systemd/user
+install -m 0644 "$SRC/systemd/sandbroker-bridge.service" /etc/systemd/user/
 systemctl daemon-reload
 
 # One service per vault, read straight from the config so adding a vault is a
@@ -153,12 +158,29 @@ sleep 1
 say "verify"
 "$BIN" doctor || true
 
+# The bridge belongs to the human, so enable it for whoever invoked sudo rather
+# than making them remember a second command.
+if [ -n "$CALLER" ]; then
+  CALLER_UID="$(id -u "$CALLER")"
+  if [ -d "/run/user/$CALLER_UID" ]; then
+    say "enabling the sandboxed-client bridge for $CALLER"
+    loginctl enable-linger "$CALLER" >/dev/null 2>&1 || true
+    sudo -u "$CALLER" \
+      XDG_RUNTIME_DIR="/run/user/$CALLER_UID" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$CALLER_UID/bus" \
+      systemctl --user enable --now sandbroker-bridge.service >/dev/null 2>&1 \
+      || warn "could not enable it automatically; run: systemctl --user enable --now sandbroker-bridge"
+  else
+    warn "no user session for $CALLER; run: systemctl --user enable --now sandbroker-bridge"
+  fi
+fi
+
 cat <<'DONE'
 
 Next, as your normal user (not root):
 
     sandbroker-register-mcp          # add one MCP server per vault to Claude Code
-    sandbroker doctor                # sockets up, tokens present
+    sandbroker doctor --deep         # daemons up, vaults resolving
 
 If you were just added to the claude-broker group, log out and back in first.
 DONE

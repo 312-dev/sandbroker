@@ -77,6 +77,29 @@ Set `bind` in the config to also serve MCP over HTTP. The daemon **refuses any
 address that is not loopback or tailnet** (`100.64.0.0/10`), because that surface
 is unauthenticated by design and reachability is the whole access control.
 
+### Sandboxed clients
+
+Claude Code can run inside a bubblewrap sandbox and spawns its MCP servers in
+there too. That sandbox breaks the unix socket four separate ways: seccomp
+blocks `socket(AF_UNIX)`, the root filesystem is bound read-only so `connect()`
+could not write the inode, the network namespace is unshared so host loopback is
+a different loopback, and the user namespace collapses supplementary groups to
+`nogroup` so the `claude-broker` membership is gone.
+
+One thing survives: `/tmp` is bind-mounted from the host, and the sandboxed
+process is still your uid. So `sandbroker bridge` runs a file queue under
+`/tmp/sandbroker-bridge/<vault>/{req,resp}`, mode `0700` and owned by you, and
+relays it to the sockets:
+
+```bash
+systemctl --user enable --now sandbroker-bridge    # install.sh does this for you
+```
+
+`sandbroker connect` tries the socket first and falls back to the queue on its
+own, so the same MCP registration works sandboxed or not. The bridge holds no
+credentials and makes no decisions: it moves bytes between a directory your uid
+already owns and a socket your uid could already open. It widens nothing.
+
 ## Usage
 
 Discover, then run:

@@ -14,6 +14,7 @@ import socket
 import sys
 import time
 
+from . import bridge
 from . import config as config_mod
 from . import mcp
 from . import server as server_mod
@@ -67,8 +68,36 @@ def cmd_serve(args):
 # -- connect ----------------------------------------------------------------
 
 def cmd_connect(args):
+    """Stdio bridge for an MCP client. Socket when possible, file queue when not.
+
+    The fallback is not a nicety: inside Claude Code's sandbox the socket is
+    unreachable four different ways (see bridge.py), and the file queue is the
+    only channel left. Trying the socket first keeps the fast path fast for
+    unsandboxed sessions.
+    """
     cfg = _load(args)
-    return server_mod.bridge_stdio(cfg.socket_path(args.vault))
+    sock = cfg.socket_path(args.vault)
+    if not args.force_bridge:
+        try:
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.connect(sock)
+            probe.close()
+        except OSError:
+            pass
+        else:
+            return server_mod.bridge_stdio(sock)
+    return bridge.client_stdio(bridge.DEFAULT_BASE, args.vault)
+
+
+def cmd_bridge(args):
+    """Relay the file queues to the sockets. Runs as the human, unsandboxed."""
+    cfg = _load(args)
+    log = _log()
+    try:
+        bridge.serve_queues(cfg, log)
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 # -- alerts -----------------------------------------------------------------
@@ -249,7 +278,14 @@ def main(argv=None):
 
     connect = sub.add_parser("connect", help="stdio bridge for an MCP client")
     connect.add_argument("--vault", required=True)
+    connect.add_argument("--force-bridge", action="store_true",
+                         help="skip the socket and use the file queue "
+                              "(for testing the sandboxed path)")
     connect.set_defaults(func=cmd_connect)
+
+    bridge_cmd = sub.add_parser(
+        "bridge", help="relay sandboxed clients' file queues to the sockets")
+    bridge_cmd.set_defaults(func=cmd_bridge)
 
     sweep = sub.add_parser("sweep", help="re-push open leak alerts")
     sweep.set_defaults(func=cmd_sweep)

@@ -1,0 +1,26 @@
+[Unit]
+# A USER unit, deliberately. It must run as the human, because the queue
+# directory's access control is uid ownership: the sandboxed client is the same
+# uid and gets in that way, since the sandbox collapses supplementary groups to
+# `nogroup` and the claude-broker membership is not available inside.
+Description=Relay sandboxed MCP clients to the sandbroker sockets
+Documentation=https://github.com/312-dev/sandbroker
+After=default.target
+
+[Service]
+Type=exec
+# `sg` is needed because talking to the broker socket requires claude-broker,
+# and a systemd --user manager started before the group was granted still
+# carries the old credentials. sg re-execs with the group applied, so this works
+# without waiting for a logout.
+ExecStart=/usr/bin/sg claude-broker -c "exec /usr/local/bin/sandbroker bridge"
+Restart=always
+RestartSec=2
+
+# It holds no credentials and makes no decisions: it moves bytes between a
+# directory this uid already owns and a socket this uid could already open.
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
