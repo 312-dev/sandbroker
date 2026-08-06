@@ -27,10 +27,23 @@
   "default_timeout": 60,
   "max_timeout": 600,
 
+  "_vault_comment": [
+    "require_unlock gates a vault: no secret from it is resolved until a human",
+    "runs `sudo sandbroker unlock <Vault>`, and the unlock expires on its own.",
+    "The enforcement is the filesystem, not code -- the marker directory is 0700",
+    "and owned by the broker, so writing one needs root or the broker user, and",
+    "typing that sudo password IS the approval.",
+    "",
+    "Only `run` is gated. list_items and list_fields return names, never values,",
+    "so gating them would add friction without adding safety."
+  ],
+
   "vaults": {
     "Dev":        {"vault": "312.dev - Dev",        "token": "Dev",        "port": 8770},
     "Staging":    {"vault": "312.dev - Staging",    "token": "Staging",    "port": 8771},
-    "Production": {"vault": "312.dev - Production", "token": "Production", "port": 8772},
-    "Infra":      {"vault": "312.dev - Infra",      "token": "Infra",      "port": 8773}
+    "Production": {"vault": "312.dev - Production", "token": "Production", "port": 8772,
+                   "require_unlock": true},
+    "Infra":      {"vault": "312.dev - Infra",      "token": "Infra",      "port": 8773,
+                   "require_unlock": true}
   }
 }

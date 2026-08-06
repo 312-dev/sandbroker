@@ -95,6 +95,30 @@ that could silence its own alarm makes the alarm worthless.
 
 Report a suspected leak even if you think you caused it. Especially then.
 
+## When a vault is locked
+
+Some vaults (typically Production and Infra) are gated. `run` comes back with:
+
+```
+Production is LOCKED. No secret from this vault will be resolved until
+a human unlocks it on the host:
+    sudo sandbroker unlock Production --minutes 30
+```
+
+This is not a fault and not something to work around. Do this:
+
+1. Tell the user plainly that the vault is locked, **what you need from it, and
+   why**. They are deciding whether to allow it, so give them what they need to
+   decide.
+2. Give them the exact command above.
+3. Wait for them to say it is done, then retry the identical call.
+
+**Do not** look for another route to the credential, do not try to unlock it
+yourself, and do not switch to a different vault hoping it holds the same
+secret. There is no tool that lifts the gate, by design. Listing is never gated,
+so you can still use `list_items` and `list_fields` to work out exactly what you
+will need before asking.
+
 ## When something fails
 
 - **`isError` on a tool call** -- the message says what to fix (bad reference,

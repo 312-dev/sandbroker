@@ -98,6 +98,59 @@ class TestQueueRoundTrip(unittest.TestCase):
         self.assertEqual([], [n for n in os.listdir(req_dir) if n.endswith(".json")])
 
 
+class TestConcurrency(unittest.TestCase):
+    """Every request must get exactly one reply, even under load.
+
+    The original dispatch loop re-listed the queue every 50ms and only deleted a
+    request after a worker had opened it, so the same request could be handed to
+    two workers. The loser returned without writing a response, silently losing
+    the reply. Four MCP servers handshaking at once made that near-certain, and
+    it presented as 'three failed, one connected'. Sequential tests never saw it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.harness = QueueHarness(self.tmp)
+
+    def tearDown(self):
+        self.harness.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_every_concurrent_request_gets_a_reply(self):
+        count = 40
+        req_dir, resp_dir = bridge.queue_dirs(self.harness.base, "Dev")
+        ids = ["c%03d" % i for i in range(count)]
+
+        # Write them all at once, the way four servers starting together do.
+        for rid in ids:
+            bridge._write_atomic(os.path.join(req_dir, rid + ".json"),
+                                 {"jsonrpc": "2.0", "id": rid, "method": "ping"})
+
+        deadline = time.time() + 45
+        missing = set(ids)
+        while missing and time.time() < deadline:
+            missing = {r for r in missing
+                       if not os.path.exists(os.path.join(resp_dir, r + ".json"))}
+            if missing:
+                time.sleep(0.05)
+        self.assertEqual(set(), missing,
+                         "%d of %d replies were lost" % (len(missing), count))
+
+    def test_no_request_is_left_behind(self):
+        req_dir, resp_dir = bridge.queue_dirs(self.harness.base, "Dev")
+        for i in range(15):
+            bridge._write_atomic(os.path.join(req_dir, "l%02d.json" % i),
+                                 {"jsonrpc": "2.0", "id": i, "method": "ping"})
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            left = [n for n in os.listdir(req_dir)]
+            if not left:
+                break
+            time.sleep(0.05)
+        self.assertEqual([], os.listdir(req_dir),
+                         "claimed requests were not cleaned up")
+
+
 class TestHeartbeat(unittest.TestCase):
     """Without liveness, a client whose bridge is down queues into the void and
     waits out CLIENT_TIMEOUT, which an MCP client renders as 'connecting...'

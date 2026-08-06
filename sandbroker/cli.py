@@ -16,6 +16,7 @@ import time
 
 from . import bridge
 from . import config as config_mod
+from . import locks
 from . import mcp
 from . import server as server_mod
 from .alert import Alerter
@@ -123,6 +124,49 @@ def cmd_ack(args):
     return 0
 
 
+def cmd_unlock(args):
+    cfg = _load(args)
+    try:
+        until = locks.unlock(cfg, args.vault, args.minutes)
+    except locks.LockError as exc:
+        sys.stderr.write("sandbroker: %s\n" % exc)
+        return 1
+    print("%s unlocked until %s (%d min)"
+          % (args.vault, time.strftime("%H:%M", time.localtime(until)), args.minutes))
+    return 0
+
+
+def cmd_lock(args):
+    cfg = _load(args)
+    try:
+        removed = locks.lock(cfg, args.vault)
+    except locks.LockError as exc:
+        sys.stderr.write("sandbroker: %s\n" % exc)
+        return 1
+    print("%s locked%s" % (args.vault, "" if removed else " (was already locked)"))
+    return 0
+
+
+def cmd_locks(args):
+    """Ask each daemon, rather than reading the markers.
+
+    The marker directory is 0700 and owned by the broker, so a normal user
+    cannot read it -- which is the whole point. The daemon can, so it answers.
+    """
+    cfg = _load(args)
+    for alias in sorted(cfg.vaults):
+        sock = cfg.socket_path(alias)
+        if not os.path.exists(sock):
+            print("%-12s daemon DOWN" % alias)
+            continue
+        reply, err = _probe(sock, {"jsonrpc": "2.0", "id": 1,
+                                   "method": "locks/status"})
+        result = (reply or {}).get("result")
+        print("%-12s %s" % (alias, result["summary"] if result
+                            else "unknown (%s)" % (err or "no answer")))
+    return 0
+
+
 def cmd_alerts(args):
     cfg = _load(args)
     open_alerts = Alerter(cfg).open_alerts()
@@ -227,6 +271,10 @@ def cmd_doctor(args):
             if not os.path.exists(cfg.token_file(alias)):
                 problems += 1
 
+        if locks.requires_unlock(cfg, alias):
+            bits.append(locks.describe(cfg, alias)
+                        if tokens_visible else "gated (unlock required)")
+
         if args.deep and os.path.exists(sock):
             # Through the daemon, not by loading the token here: this uid cannot
             # read it, and going through the socket is what users actually do.
@@ -293,6 +341,18 @@ def main(argv=None):
     ack = sub.add_parser("ack", help="acknowledge a leak alert")
     ack.add_argument("alert_id")
     ack.set_defaults(func=cmd_ack)
+
+    unlock = sub.add_parser("unlock", help="unlock a gated vault (needs sudo)")
+    unlock.add_argument("vault")
+    unlock.add_argument("--minutes", "-m", type=int, default=locks.DEFAULT_MINUTES)
+    unlock.set_defaults(func=cmd_unlock)
+
+    lock_cmd = sub.add_parser("lock", help="re-lock a gated vault (needs sudo)")
+    lock_cmd.add_argument("vault")
+    lock_cmd.set_defaults(func=cmd_lock)
+
+    locks_cmd = sub.add_parser("locks", help="show each vault's lock state")
+    locks_cmd.set_defaults(func=cmd_locks)
 
     alerts = sub.add_parser("alerts", help="list open leak alerts")
     alerts.set_defaults(func=cmd_alerts)

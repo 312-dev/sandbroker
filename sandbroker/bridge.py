@@ -42,7 +42,14 @@ import threading
 import time
 import uuid
 
-DEFAULT_BASE = os.environ.get("SANDBROKER_BRIDGE_DIR", "/tmp/sandbroker-bridge")
+# Deliberately NOT /tmp/sandbroker-bridge. The retired proof-of-concept used
+# that path and treated every subdirectory in it as a session id, so a leftover
+# poc bridge would happily consume these JSON-RPC requests, forward them to a
+# daemon that no longer speaks this protocol, and answer {"ok": false, "error":
+# "denied"} -- which an MCP client rejects as a protocol violation and reports as
+# a failed server. Two relays racing over one directory is not something a
+# comment can prevent, so the directories are simply disjoint.
+DEFAULT_BASE = os.environ.get("SANDBROKER_BRIDGE_DIR", "/tmp/sandbroker-mcp")
 
 POLL_INTERVAL = 0.05
 # Generous because `run` may legitimately take max_timeout (default 600s) plus
@@ -252,6 +259,8 @@ def serve_queues(config, log, stop=None, base=None):
     log("bridging %s via %s" % (", ".join(vaults), base))
 
     def handle(vault, req_path, resp_path):
+        # req_path is already claimed (renamed out of the *.json glob) by the
+        # dispatch loop, so this open cannot lose a race with another worker.
         try:
             with open(req_path, "r", encoding="utf-8") as fh:
                 message = json.load(fh)
@@ -296,12 +305,24 @@ def serve_queues(config, log, stop=None, base=None):
             for name in names:
                 if not name.endswith(".json"):
                     continue
+                # Claim it in this single-threaded loop by renaming it out of
+                # the *.json glob, so a request can only ever be dispatched
+                # once. Without it, the next poll 50ms later could re-list a
+                # request whose worker has not yet consumed it, and the worker
+                # that lost the read would return WITHOUT writing a response --
+                # silently losing the reply. os.rename is atomic, so exactly one
+                # claim wins. Defensive rather than a fix for anything observed.
+                src = os.path.join(req_dir, name)
+                claimed = src + ".taken"          # no longer matches *.json
+                try:
+                    os.rename(src, claimed)
+                except OSError:
+                    continue
                 idle = False
                 rid = name[:-len(".json")]
                 threading.Thread(
                     target=handle,
-                    args=(vault, os.path.join(req_dir, name),
-                          os.path.join(resp_dir, rid + ".json")),
+                    args=(vault, claimed, os.path.join(resp_dir, rid + ".json")),
                     daemon=True,
                 ).start()
         time.sleep(POLL_INTERVAL if not idle else POLL_INTERVAL * 4)

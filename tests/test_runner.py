@@ -36,6 +36,19 @@ class FakeVault:
     def service_account_token(self):
         return self._sa
 
+    # Metadata only, mirroring the real Vault: titles and field labels, never a
+    # value. Present so tests can assert that listing is not gated.
+    def list_items(self):
+        titles = sorted({ref.split("/")[3] for ref in self.values})
+        return [{"title": t, "ref": "op://Dev/%s" % t, "category": "LOGIN"}
+                for t in titles]
+
+    def list_fields(self, item):
+        return [{"field": ref.split("/")[4], "ref": ref,
+                 "type": "CONCEALED", "populated": True}
+                for ref in sorted(self.values)
+                if ref.split("/")[3] == item]
+
 
 def make_config(**overrides):
     data = {

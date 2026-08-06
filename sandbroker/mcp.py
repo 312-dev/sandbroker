@@ -9,6 +9,7 @@ place to keep the dependency count at zero.
 import json
 import traceback
 
+from . import locks
 from . import runner
 from .onepassword import VaultError
 from .runner import RunError
@@ -184,6 +185,15 @@ class Server:
                 return _ok(msg_id, {"tools": tool_definitions(self.vault.alias)})
             if method == "tools/call":
                 return _ok(msg_id, self._call_tool(params))
+            if method == "locks/status":
+                unlocked, remaining = locks.status(self.config, self.vault.alias)
+                return _ok(msg_id, {
+                    "vault": self.vault.alias,
+                    "required": locks.requires_unlock(self.config, self.vault.alias),
+                    "unlocked": unlocked,
+                    "remaining_seconds": remaining,
+                    "summary": locks.describe(self.config, self.vault.alias),
+                })
             if method in ("resources/list", "prompts/list"):
                 # Claude Code probes these even when not advertised; an empty
                 # list is friendlier than an error it has to swallow.
@@ -243,6 +253,20 @@ class Server:
             return _tool_error(str(exc))
 
     def _tool_run(self, args):
+        # The gate sits here rather than on the whole server: list_items and
+        # list_fields return names only and cannot leak a value, so locking them
+        # would add friction without adding safety. `run` is the only path that
+        # resolves plaintext, so it is the only one worth gating.
+        unlocked, _ = locks.status(self.config, self.vault.alias)
+        if not unlocked:
+            return _tool_error(
+                "%s is LOCKED. No secret from this vault will be resolved until "
+                "a human unlocks it on the host:\n"
+                "    sudo sandbroker unlock %s --minutes 30\n"
+                "Ask them to run it, say why you need it, then retry this exact "
+                "call. Do not look for another way to the credential."
+                % (self.vault.alias, self.vault.alias))
+
         result = runner.run(
             self.vault,
             self.config,

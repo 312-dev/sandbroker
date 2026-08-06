@@ -100,6 +100,35 @@ own, so the same MCP registration works sandboxed or not. The bridge holds no
 credentials and makes no decisions: it moves bytes between a directory your uid
 already owns and a socket your uid could already open. It widens nothing.
 
+## Gating a vault
+
+Add `"require_unlock": true` to a vault and it resolves nothing until a human
+says so:
+
+```bash
+sudo sandbroker unlock Production --minutes 30
+sandbroker locks                    # Production  unlocked, 28 min left
+sudo sandbroker lock Production     # or let it expire
+```
+
+While locked, `run` returns an error telling the agent to ask you. Listing is
+never gated: names cannot leak a value, so gating them adds friction without
+safety.
+
+**The enforcement is a file permission, not code.** The marker directory is
+`0700` and owned by the broker user, so writing one requires root or the broker
+-- and typing that sudo password is the approval. There is no uid check to
+bypass, and no tool an agent can call to lift its own gate.
+
+This is deliberately a daemon-side gate rather than a Claude Code hook. A hook
+would be advisory: sandboxed agents are granted write access to `~/.claude`, so
+anything enforced there is enforced by a file the gated party can edit.
+
+It does not stop an agent that wants Production -- it can still ask you, and you
+might say yes without reading carefully. What it buys is that Production access
+becomes a deliberate, timestamped act instead of something that happens quietly
+inside a task you thought was about Dev.
+
 ## Usage
 
 Discover, then run:
