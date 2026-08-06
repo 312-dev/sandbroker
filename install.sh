@@ -165,11 +165,21 @@ if [ -n "$CALLER" ]; then
   if [ -d "/run/user/$CALLER_UID" ]; then
     say "enabling the sandboxed-client bridge for $CALLER"
     loginctl enable-linger "$CALLER" >/dev/null 2>&1 || true
-    sudo -u "$CALLER" \
-      XDG_RUNTIME_DIR="/run/user/$CALLER_UID" \
-      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$CALLER_UID/bus" \
-      systemctl --user enable --now sandbroker-bridge.service >/dev/null 2>&1 \
-      || warn "could not enable it automatically; run: systemctl --user enable --now sandbroker-bridge"
+    # enable, then RESTART. `enable --now` does nothing to an already-running
+    # unit, which on an upgrade would silently leave the previous code relaying.
+    run_user() {
+      sudo -u "$CALLER" \
+        XDG_RUNTIME_DIR="/run/user/$CALLER_UID" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$CALLER_UID/bus" \
+        systemctl --user "$@" >/dev/null 2>&1
+    }
+    run_user daemon-reload
+    if run_user enable sandbroker-bridge.service && \
+       run_user restart sandbroker-bridge.service; then
+      :
+    else
+      warn "could not start it automatically; run: systemctl --user enable --now sandbroker-bridge"
+    fi
   else
     warn "no user session for $CALLER; run: systemctl --user enable --now sandbroker-bridge"
   fi
