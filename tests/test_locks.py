@@ -77,6 +77,55 @@ class TestLockState(unittest.TestCase):
         self.assertEqual(0, mode & 0o077)
 
 
+class TestRootWrittenMarkerReachesTheBroker(unittest.TestCase):
+    """Writing a marker needs root -- that IS the gate -- but READING it is the
+    daemon's job, and the daemon is not root. Without a chown the marker lands
+    root:root 0600 in a root:root 0700 directory, the daemon cannot traverse to
+    it, and `unlock` prints success while the vault stays locked. A success
+    message for something that did not work is worse than an error."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cfg = gated_config(self.tmp)
+        os.makedirs(self.cfg.alerts_dir, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_owner_is_taken_from_a_broker_owned_directory(self):
+        info = os.stat(self.cfg.alerts_dir)
+        self.assertEqual((info.st_uid, info.st_gid),
+                         locks._broker_owner(self.cfg))
+
+    def test_as_root_the_marker_and_its_directory_are_handed_over(self):
+        chowned = []
+        real_geteuid, real_chown = os.geteuid, os.chown
+        os.geteuid = lambda: 0
+        os.chown = lambda p, u, g: chowned.append((os.path.basename(p), u, g))
+        try:
+            locks.unlock(self.cfg, "Dev", minutes=5)
+        finally:
+            os.geteuid, os.chown = real_geteuid, real_chown
+
+        names = [name for name, _, _ in chowned]
+        self.assertIn("unlocks", names, "the directory must be handed over too, "
+                                        "or the broker cannot traverse into it")
+        self.assertIn("Dev.json", names)
+        owner = locks._broker_owner(self.cfg)
+        for _, uid, gid in chowned:
+            self.assertEqual(owner, (uid, gid))
+
+    def test_as_a_normal_user_nothing_is_chowned(self):
+        chowned = []
+        real_chown = os.chown
+        os.chown = lambda p, u, g: chowned.append(p)
+        try:
+            locks.unlock(self.cfg, "Dev", minutes=5)
+        finally:
+            os.chown = real_chown
+        self.assertEqual([], chowned)
+
+
 class TestGateIsEnforcedOnRun(unittest.TestCase):
     """The gate has to sit in the daemon. A client-side gate would be advisory:
     the sandbox grants agents write access to ~/.claude, so anything enforced

@@ -125,13 +125,42 @@ def cmd_ack(args):
 
 
 def cmd_unlock(args):
+    """Unlock, then CONFIRM WITH THE DAEMON that it actually took.
+
+    Writing the marker and it being usable are different things: the writer is
+    root and the reader is the broker, so a permissions mistake can leave a
+    perfectly successful write that the daemon cannot see. Reporting success on
+    the strength of the write alone once meant an unlock that printed
+    "unlocked until 22:23" while every call kept failing as LOCKED. Ground truth
+    is what the daemon says, so ask it.
+    """
     cfg = _load(args)
     try:
         until = locks.unlock(cfg, args.vault, args.minutes)
     except locks.LockError as exc:
         sys.stderr.write("sandbroker: %s\n" % exc)
         return 1
-    print("%s unlocked until %s (%d min)"
+
+    sock = cfg.socket_path(args.vault)
+    if os.path.exists(sock):
+        reply, err = _probe(sock, {"jsonrpc": "2.0", "id": 1,
+                                   "method": "locks/status"})
+        result = (reply or {}).get("result") or {}
+        if not result.get("unlocked"):
+            sys.stderr.write(
+                "sandbroker: the marker was written but the daemon still reports "
+                "%s LOCKED%s.\n"
+                "The broker user cannot read the unlock marker. Check ownership "
+                "of\n  %s\nIt must be readable by the user the daemon runs as.\n"
+                % (args.vault,
+                   "" if not err else " (%s)" % err,
+                   os.path.dirname(locks.marker_path(cfg, args.vault))))
+            return 1
+    else:
+        sys.stderr.write("sandbroker: warning, sandbroker@%s is not running, so "
+                         "this unlock could not be confirmed.\n" % args.vault)
+
+    print("%s unlocked until %s (%d min), confirmed by the daemon"
           % (args.vault, time.strftime("%H:%M", time.localtime(until)), args.minutes))
     return 0
 

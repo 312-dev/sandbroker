@@ -51,6 +51,45 @@ def marker_path(config, vault):
     return os.path.join(_dir(config), "%s.json" % vault)
 
 
+def _broker_owner(config):
+    """The uid/gid the daemon runs as.
+
+    Taken from a directory the installer created for the broker rather than
+    hardcoding a user name, so this keeps working if the account is ever renamed.
+    """
+    for path in (config.alerts_dir,
+                 os.path.dirname(os.path.normpath(config.alerts_dir)),
+                 config.tokens_dir):
+        try:
+            info = os.stat(path)
+        except OSError:
+            continue
+        return info.st_uid, info.st_gid
+    return None
+
+
+def _hand_to_broker(config, *paths):
+    """Give root-created markers to the broker.
+
+    Writing a marker requires root (that IS the gate), but READING it is the
+    daemon's job, and the daemon is not root. Without this the marker lands
+    root:root 0600 inside a root:root 0700 directory, the daemon cannot even
+    traverse to it, status() fails closed, and `unlock` reports success while
+    the vault stays locked -- a success message for something that did not work,
+    which is worse than an error.
+    """
+    if os.geteuid() != 0:
+        return                      # already running as the broker; nothing to do
+    owner = _broker_owner(config)
+    if owner is None:
+        return
+    for path in paths:
+        try:
+            os.chown(path, owner[0], owner[1])
+        except OSError:
+            pass
+
+
 def requires_unlock(config, vault):
     try:
         return bool(config.vault(vault).get("require_unlock"))
@@ -96,6 +135,8 @@ def unlock(config, vault, minutes=DEFAULT_MINUTES):
                        "granted": int(time.time())}, fh)
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        # Root wrote it; the broker has to be able to read it.
+        _hand_to_broker(config, directory, path)
     except PermissionError:
         raise LockError(
             "permission denied writing the unlock marker.\n"
