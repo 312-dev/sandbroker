@@ -24,13 +24,18 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 
-def tool_definitions(alias):
+def tool_definitions(alias, scheme="op", default_field="credential"):
     """Tool schemas, phrased for the agent that will read them.
 
     The descriptions carry the operating rules -- use $VAR, never ask for a
     value, report a sighting -- because the tool list is the one piece of
     documentation an agent is guaranteed to have loaded.
+
+    `scheme` and `default_field` describe the backend serving this alias, so the
+    worked examples match it. An agent copying `op://Dev/item/credential` at a
+    Keeper-backed server would be copying a reference that server refuses.
     """
+    qualified = "%s://%s" % (scheme, alias)
     return [
         {
             "name": "run",
@@ -41,13 +46,13 @@ def tool_definitions(alias):
                 "and never need to: the broker resolves each reference and puts "
                 "it in the environment before the command starts.\n\n"
                 "  command: curl -sS -H \"Authorization: Bearer $TOKEN\" https://api.x/v1/me\n"
-                "  secrets: {\"TOKEN\": \"op://%s/my-item/credential\"}\n\n"
+                "  secrets: {\"TOKEN\": \"%s/my-item/%s\"}\n\n"
                 "stdout and stderr come back scrubbed of every injected value, so "
                 "verbose output that echoes a header is safe. Anything the broker "
                 "did NOT inject is NOT scrubbed: if a response hands back a NEW "
                 "live credential (an OAuth access token, a session cookie, a "
                 "signed URL), that arrives in the clear. Call report_leak the "
-                "moment you see one." % (alias, alias)
+                "moment you see one." % (alias, qualified, default_field)
             ),
             "inputSchema": {
                 "type": "object",
@@ -61,10 +66,10 @@ def tool_definitions(alias):
                         "type": "object",
                         "description": "Map of environment variable name to "
                                        "reference, e.g. {\"TOKEN\": "
-                                       "\"op://%s/item/field\"}. The item and "
+                                       "\"%s/item/field\"}. The item and "
                                        "field shorthand \"item/field\" also "
                                        "works. Any field of any item is "
-                                       "allowed." % alias,
+                                       "allowed." % qualified,
                         "additionalProperties": {"type": "string"},
                     },
                     "timeout": {
@@ -182,7 +187,9 @@ class Server:
             if method == "ping":
                 return _ok(msg_id, {})
             if method == "tools/list":
-                return _ok(msg_id, {"tools": tool_definitions(self.vault.alias)})
+                return _ok(msg_id, {"tools": tool_definitions(
+                    self.vault.alias, self.vault.ref_scheme,
+                    self.vault.default_field)})
             if method == "tools/call":
                 return _ok(msg_id, self._call_tool(params))
             if method == "locks/status":

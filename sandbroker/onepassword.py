@@ -32,6 +32,13 @@ class VaultError(Exception):
 
 
 class Vault:
+    # How the rest of the daemon names this backend: in the startup log, in
+    # doctor's output, and in the reference scheme the tool descriptions teach.
+    backend = "1password"
+    backend_label = "1Password"
+    ref_scheme = "op"
+    default_field = DEFAULT_FIELD
+
     def __init__(self, alias, real_name, token_file, op_bin, timeout=30):
         self.alias = alias
         self.real_name = real_name

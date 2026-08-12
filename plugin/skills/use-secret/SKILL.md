@@ -49,6 +49,12 @@ mercury-api/credential               vault implied by the server
 mercury-api                          field defaults to "credential"
 ```
 
+The two shorthands work on every server. The qualified form belongs to the
+password manager behind that vault: `op://` with a default field of `credential`
+for 1Password, `keeper://` with a default field of `password` for Keeper. The
+`run` tool's own description shows which one this server wants, and `list_items`
+returns references already spelled correctly -- copy one rather than guessing.
+
 ## Writing the command
 
 It runs under `/bin/sh -c`, so pipes, redirects and `&&` all work.
