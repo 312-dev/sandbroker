@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Linked git worktrees that agent sessions create in-tree. They contain a full
+# second checkout, so an unguarded `git add -A` commits the repo into itself.
+.claude/worktrees/
+
 # Zero-byte placeholders the Claude Code sandbox creates as bind-mount targets
 # when an agent works in this directory. They are empty, but an empty .mcp.json
 # is reported by Claude Code as "MCP config is not a valid JSON", so they are

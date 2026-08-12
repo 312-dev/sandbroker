@@ -3,12 +3,25 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The README promises 3.8+, so the suite has to actually run on the oldest
+    # version promised. Testing only the newest is how that promise rots.
+    #
+    # 3.8 is pinned to ubuntu-22.04 because setup-python ships no 3.8 build for
+    # 24.04, which is what ubuntu-latest now resolves to.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python-version: '3.8',  os: ubuntu-22.04}
+          - {python-version: '3.10', os: ubuntu-latest}
+          - {python-version: '3.12', os: ubuntu-latest}
+          - {python-version: '3.13', os: ubuntu-latest}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
       # No install step: the package is standard library only, which is the
       # point. If this ever needs a `pip install`, something has gone wrong.
       - run: bash tests/run.sh

@@ -63,7 +63,7 @@ class VaultCase(unittest.TestCase):
         token = os.path.join(self.tmp, "Dev.token")
         with open(token, "w", encoding="utf-8") as fh:
             fh.write("fake-service-account-token")
-        self.vault = Vault("Dev", "312.dev - Dev", token, op)
+        self.vault = Vault("Dev", "Acme - Dev", token, op)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

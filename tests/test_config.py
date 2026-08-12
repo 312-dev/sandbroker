@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sandbroker.config import Config, ConfigError  # noqa: E402
 from sandbroker.onepassword import Vault, VaultError  # noqa: E402
 
-VAULTS = {"Dev": {"vault": "312.dev - Dev", "token": "Dev", "port": 8770}}
+VAULTS = {"Dev": {"vault": "Acme - Dev", "token": "Dev", "port": 8770}}
 
 
 class TestBindPolicy(unittest.TestCase):
@@ -25,13 +25,15 @@ class TestBindPolicy(unittest.TestCase):
         self.assertEqual("127.0.0.1", cfg.bind_address())
 
     def test_tailnet_allowed(self):
-        for addr in ("100.85.183.28", "100.64.0.1", "100.127.255.254"):
+        for addr in ("100.64.0.1", "100.85.12.34", "100.127.255.254"):
             cfg = Config({"vaults": VAULTS, "bind": addr})
             self.assertEqual(addr, cfg.bind_address())
 
     def test_public_and_lan_refused(self):
-        for addr in ("0.0.0.0", "192.168.1.10", "10.0.0.5", "167.233.219.160",
-                     "100.200.1.1", "100.5.5.5", ""):
+        # 203.0.113.0/24 and 198.51.100.0/24 are RFC 5737 documentation ranges,
+        # so nothing here is a real host anyone could be pointed at.
+        for addr in ("0.0.0.0", "192.168.1.10", "10.0.0.5", "203.0.113.10",
+                     "198.51.100.5", "100.200.1.1", "100.5.5.5", ""):
             cfg = Config({"vaults": VAULTS, "bind": addr})
             if addr == "":
                 self.assertIsNone(cfg.bind_address())
@@ -65,7 +67,7 @@ class TestConfigValidation(unittest.TestCase):
 
 class TestRefParsing(unittest.TestCase):
     def setUp(self):
-        self.vault = Vault("Dev", "312.dev - Dev", "/nonexistent", "/bin/true")
+        self.vault = Vault("Dev", "Acme - Dev", "/nonexistent", "/bin/true")
 
     def test_fully_qualified(self):
         self.assertEqual(("mercury", "credential"),
@@ -81,7 +83,7 @@ class TestRefParsing(unittest.TestCase):
 
     def test_real_vault_name_also_accepted(self):
         self.assertEqual(("m", "f"),
-                         self.vault.parse_ref("op://312.dev - Dev/m/f"))
+                         self.vault.parse_ref("op://Acme - Dev/m/f"))
 
     def test_another_vault_is_refused_with_a_pointer(self):
         """Cross-vault refs are the isolation boundary: this process holds only
