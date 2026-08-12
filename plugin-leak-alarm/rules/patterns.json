@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Credential shapes worth waking someone up for.",
+    "",
+    "This list is deliberately SHORT and prefix-anchored. Every entry is a token",
+    "format whose issuer chose a distinctive prefix, which means a match is",
+    "nearly always a real credential rather than a coincidence. There is no",
+    "entropy scoring and no generic 'long random string' rule, because the alarm",
+    "is sticky: a false positive costs a human interruption and a manual",
+    "acknowledgement, so the bar to add a pattern is 'I would want to be paged",
+    "for this at 3am', not 'this might be a secret'.",
+    "",
+    "Add your own with `extra_patterns` in the config rather than editing this",
+    "file, so an update does not overwrite them.",
+    "",
+    "Deliberately NOT here:",
+    "  AWS secret access keys  -- 40 chars of base64 with no prefix, matching",
+    "                             them means matching every hash and blob",
+    "  bare 'Bearer <token>'   -- the shape says nothing about whether the token",
+    "                             is live, and it appears in every API doc",
+    "  generic high entropy    -- fires on checksums, UUIDs, minified JS, and",
+    "                             git object ids"
+  ],
+
+  "patterns": [
+    {"name": "github-pat-classic",   "regex": "gh[pousr]_[A-Za-z0-9]{36,}"},
+    {"name": "github-pat-fine",      "regex": "github_pat_[A-Za-z0-9_]{60,}"},
+    {"name": "gitlab-pat",           "regex": "glpat-[A-Za-z0-9_-]{20,}"},
+    {"name": "anthropic-api-key",    "regex": "sk-ant-[A-Za-z0-9_-]{20,}"},
+    {"name": "openai-api-key",       "regex": "sk-(?:proj-)?[A-Za-z0-9_-]{32,}"},
+    {"name": "google-oauth-token",   "regex": "ya29\\.[A-Za-z0-9_-]{20,}"},
+    {"name": "aws-access-key-id",    "regex": "(?:AKIA|ASIA)[0-9A-Z]{16}"},
+    {"name": "slack-token",          "regex": "xox[baprs]-[A-Za-z0-9-]{10,}"},
+    {"name": "slack-app-token",      "regex": "xapp-[0-9]-[A-Za-z0-9-]{10,}"},
+    {"name": "stripe-secret-key",    "regex": "[sr]k_live_[A-Za-z0-9]{20,}"},
+    {"name": "shopify-token",        "regex": "shp(?:at|ss|ca|pa)_[a-fA-F0-9]{32}"},
+    {"name": "npm-token",            "regex": "npm_[A-Za-z0-9]{36}"},
+    {"name": "digitalocean-token",   "regex": "dop_v1_[a-f0-9]{64}"},
+    {"name": "sendgrid-key",         "regex": "SG\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}"},
+    {"name": "huggingface-token",    "regex": "hf_[A-Za-z0-9]{34,}"},
+    {"name": "onepassword-sa-token", "regex": "ops_[A-Za-z0-9+/=_-]{40,}"},
+    {"name": "private-key-block",    "regex": "-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----"},
+
+    {
+      "_comment": [
+        "JWTs are the one judgement call here. A signed three-part token is",
+        "usually a live session or access token, but id_tokens and example JWTs",
+        "are everywhere in documentation. Kept, with a length floor, and listed",
+        "last so it is the obvious one to disable first if it gets noisy:",
+        "  \"disabled\": [\"jwt\"]"
+      ],
+      "name": "jwt",
+      "regex": "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}"
+    }
+  ],
+
+  "_ignore_comment": [
+    "Strings that match a pattern above but are known not to be live. The AWS",
+    "one is the literal key from Amazon's own documentation and appears in a",
+    "great deal of example code.",
+    "",
+    "Anything containing a placeholder run (xxxx, 0000, EXAMPLE, YOUR_, <...>)",
+    "is also skipped; see looks_like_placeholder in the hook."
+  ],
+
+  "ignore": [
+    "AKIAIOSFODNN7EXAMPLE",
+    "ASIAIOSFODNN7EXAMPLE"
+  ]
+}

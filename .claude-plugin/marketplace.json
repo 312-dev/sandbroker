@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "sandbroker-plugins",
-  "description": "Marketplace for sandbroker: let Claude Code use secrets without ever seeing their values.",
+  "description": "Keep credentials away from the model: sandbroker brokers them so they are never seen, leak-alarm catches the ones that get through anyway.",
   "owner": {
     "name": "Grayson Adams",
     "url": "https://github.com/312-dev"
@@ -19,6 +19,24 @@
         "mcp",
         "broker",
         "1password"
+      ],
+      "author": {
+        "name": "Grayson Adams",
+        "url": "https://github.com/312-dev"
+      }
+    },
+    {
+      "name": "leak-alarm",
+      "source": "./plugin-leak-alarm",
+      "description": "Notice a live credential crossing a tool boundary. Denies a tool call carrying one, alerts on one that arrives in output, and adds the report-leak skill. Needs no broker and no vault.",
+      "version": "1.0.0",
+      "category": "security",
+      "tags": [
+        "secrets",
+        "credentials",
+        "security",
+        "hooks",
+        "leak-detection"
       ],
       "author": {
         "name": "Grayson Adams",

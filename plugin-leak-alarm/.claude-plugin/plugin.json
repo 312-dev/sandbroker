@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "leak-alarm",
+  "version": "1.0.0",
+  "description": "Notice a live credential crossing a tool boundary and make a human deal with it. Blocks credentials on the way out, alerts on credentials on the way in.",
+  "author": {
+    "name": "Grayson Adams",
+    "url": "https://github.com/312-dev"
+  },
+  "homepage": "https://github.com/312-dev/sandbroker/tree/master/plugin-leak-alarm",
+  "repository": "https://github.com/312-dev/sandbroker",
+  "license": "MIT",
+  "keywords": ["secrets", "credentials", "security", "hooks", "leak-detection"],
+  "_comment": [
+    "Standalone on purpose: this plugin needs no broker, no 1Password and no",
+    "daemon. It ships with sandbroker because it is the same idea one layer",
+    "out, and because it reuses sandbroker's notifier contract -- if a",
+    "notify_command is already configured there, this inherits it.",
+    "",
+    "Requires python3 on PATH, standard library only."
+  ]
+}

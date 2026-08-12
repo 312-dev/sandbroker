@@ -53,6 +53,8 @@ That is the entire filter. See [what it does not do](#what-it-does-not-do).
   `/usr/local/bin/op`
 * A 1Password **service account** per vault, its token written to
   `/opt/sandbroker/var/tokens/<Name>.token`, mode `0400`, owned by the broker user
+* Some way to be told about a leak. Any command that exits `0` will do; see
+  [the notifier is your command](#the-notifier-is-your-command)
 
 ## Install
 
@@ -175,8 +177,8 @@ Full reasoning in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
 
 ## Leak alerts
 
-`report_leak` writes a record and pushes to ntfy immediately. An open alert
-**re-pushes every 15 minutes until a human acknowledges it on the host**:
+`report_leak` writes a record and fires a notification immediately. An open alert
+**re-fires every 15 minutes until a human acknowledges it on the host**:
 
 ```bash
 sandbroker alerts          # what is open
@@ -186,6 +188,53 @@ sudo sandbroker ack <id>   # stop the nagging
 No tool can acknowledge an alert. The alerts directory is `0700` and owned by the
 broker user, so acknowledging requires host access. An agent that could silence
 its own alarm would make the alarm worthless.
+
+### The notifier is your command
+
+sandbroker has no opinion about how you want to be told. Set `notify_command` to
+anything that exits `0` once a human has been reached:
+
+```jsonc
+"notify_command": "/opt/sandbroker/contrib/notify-ntfy.sh"
+"notify_command": "notify-send -u critical \"$SANDBROKER_ALERT_TITLE\""
+"notify_command": ["/usr/local/bin/page-me", "--severity", "high"]
+"notify_command": "jq -c . >> /var/log/sandbroker-leaks.jsonl"
+```
+
+A string runs under `/bin/sh`; a list is argv and skips the shell. The alert
+arrives twice over: the full record as JSON on **stdin**, and the same fields as
+`SANDBROKER_ALERT_*` environment variables for scripts that would rather not
+parse. A non-zero exit means undelivered, so the sweeper tries again.
+
+`where` and `detail` are written by the **agent**, and neither ever reaches the
+command line. Interpolating agent-authored text into a command string would hand
+the agent shell execution inside the very alarm that watches it, so the alert
+travels only on stdin and in the environment, where nothing re-parses it.
+
+`contrib/notify-ntfy.sh` is a worked example, not a dependency.
+
+**If `notify_command` is unset, alerts are recorded to disk and nobody is told.**
+`sandbroker doctor` counts that as a problem and the daemon warns at startup,
+because an alarm nobody hears is worse than no alarm: it reads as safety.
+
+## The other half: leak-alarm
+
+The broker removes values it resolved. It says nothing about a credential it
+never saw, and those are the ones that leak.
+
+[`plugin-leak-alarm/`](plugin-leak-alarm/) is a separate Claude Code plugin in
+this repository that watches tool traffic for credential shapes: it **denies** a
+tool call carrying one, and **alerts** on one that arrives in tool output. It
+needs no broker, no vault and no daemon, and it reuses the `notify_command`
+contract above, so a notifier written for one works for the other.
+
+It is heuristic where the broker is exact, and it can only alert rather than
+filter on the inbound path. Its README is blunt about both.
+
+```
+/plugin marketplace add 312-dev/sandbroker
+/plugin install leak-alarm@sandbroker-plugins
+```
 
 ## Operating
 

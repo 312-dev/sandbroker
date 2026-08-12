@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""List and clear alerts raised by the leak-alarm hook.
+
+Separate from the hook because the hook must stay a fast, silent thing on the
+critical path of every tool call. This is the part a human uses afterwards.
+
+A note on what this cannot promise: these alerts live under the invoking user's
+own state directory, so anything running as that user -- including the agent --
+can delete them. That is a real limit and it is why the notification, not the
+file, is the load-bearing part of this design. If you need an alarm an agent
+provably cannot silence, you need it recorded by a different uid: that is what
+sandbroker's daemon does, and its `report_leak` alerts require a human on the
+host to acknowledge.
+"""
+
+import json
+import os
+import sys
+import time
+
+STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+ALERTS_DIR = os.path.join(STATE_HOME, "leak-alarm", "alerts")
+
+
+def load():
+    try:
+        names = sorted(os.listdir(ALERTS_DIR))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(ALERTS_DIR, name), "r", encoding="utf-8") as fh:
+                out.append(json.load(fh))
+        except (OSError, ValueError):
+            continue
+    return sorted(out, key=lambda r: r.get("created", 0))
+
+
+def ago(stamp):
+    delta = max(0, int(time.time()) - int(stamp or 0))
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
+        if delta >= size:
+            return "%d%s ago" % (delta // size, unit)
+    return "just now"
+
+
+def cmd_list():
+    alerts = load()
+    if not alerts:
+        print("no leak alerts recorded")
+        return 0
+    for record in alerts:
+        print("%s  %s" % (record.get("id", "?"), ago(record.get("created"))))
+        print("    where:    %s" % record.get("where", "?"))
+        print("    patterns: %s" % record.get("detail", "?"))
+        if record.get("cwd"):
+            print("    cwd:      %s" % record["cwd"])
+        if not record.get("delivered"):
+            print("    NOT DELIVERED -- no notify_command was configured")
+    print("\n%d alert(s). Rotate anything still live, then: leak-alarm clear"
+          % len(alerts))
+    return 1
+
+
+def cmd_clear():
+    alerts = load()
+    for record in alerts:
+        try:
+            os.remove(os.path.join(ALERTS_DIR, "%s.json" % record["id"]))
+        except OSError:
+            pass
+    print("cleared %d alert(s)" % len(alerts))
+    return 0
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else "alerts"
+    if command in ("alerts", "list"):
+        return cmd_list()
+    if command == "clear":
+        return cmd_clear()
+    sys.stderr.write("usage: leak-alarm [alerts|clear]\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
