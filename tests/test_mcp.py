@@ -35,14 +35,15 @@ SKIP_REASON = "AF_UNIX is blocked in this environment (sandbox seccomp)"
 
 
 class StubAlerter(Alerter):
-    """Records pushes instead of sending them, so the suite never touches ntfy."""
+    """Records pushes instead of sending them, so the suite never execs a
+    notifier or reaches the network."""
 
     def __init__(self, config, delivered=True):
         Alerter.__init__(self, config)
         self.sent = []
         self._delivered = delivered
 
-    def push(self, title, body, priority="urgent", tags="rotating_light"):
+    def push(self, record, title, body):
         self.sent.append((title, body))
         return self._delivered
 

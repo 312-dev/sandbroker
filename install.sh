@@ -9,7 +9,7 @@
 #
 # WHAT IT NEVER TOUCHES
 #   $VAR_DIR/tokens        the 1Password service-account tokens
-#   $ETC_DIR/ntfy.token    the alert transport token
+#   $ETC_DIR/*.conf        whatever credentials your notify_command needs
 # Those are provisioned once, by hand, and losing them means re-issuing service
 # accounts. Nothing here writes or deletes them, on any code path.
 
@@ -94,6 +94,12 @@ install -m 0755 "$SRC/bin/sandbroker" "$BIN"
 install -m 0755 "$SRC/bin/sandbroker-register-mcp" /usr/local/bin/sandbroker-register-mcp
 chown -R root:root "$LIB_DIR"
 
+# Example notifiers. They are referenced by notify_command, so they must live
+# somewhere the broker user can execute -- not in a home directory it cannot
+# traverse. Refreshed on every run like the rest of the code.
+install -d -m 0755 -o root -g root "$PREFIX/contrib"
+install -m 0755 -o root -g root "$SRC"/contrib/* "$PREFIX/contrib/"
+
 # ----------------------------------------------------------------- config ----
 CONFIG="$ETC_DIR/sandbroker.json"
 if [ -f "$CONFIG" ]; then
@@ -101,7 +107,7 @@ if [ -f "$CONFIG" ]; then
 else
   say "config -> $CONFIG"
   install -m 0444 -o root -g root "$SRC/etc/sandbroker.json.example" "$CONFIG"
-  warn "review $CONFIG: vault names, ntfy url, and bind"
+  warn "review $CONFIG: vault names, notify_command, and bind"
 fi
 
 # op has to be reachable by a service that cannot traverse a private home

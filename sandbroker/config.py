@@ -20,8 +20,12 @@ DEFAULTS = {
     # tightest setting. See bind_address() for why an address is refused unless
     # it is loopback or tailnet.
     "bind": None,
-    "ntfy_url": None,
-    "ntfy_token_file": None,
+    # How a leak alert reaches a human. A string runs under /bin/sh, a list is
+    # argv. The alert arrives on stdin as JSON and in SANDBROKER_ALERT_* env
+    # vars; exit zero means delivered. Absent means alerts are recorded to disk
+    # and nothing is sent, which `doctor` reports as a problem because a silent
+    # alarm is worse than no alarm.
+    "notify_command": None,
     "max_output_bytes": 1048576,
     "default_timeout": 60,
     "max_timeout": 600,
@@ -31,6 +35,16 @@ DEFAULTS = {
 
 class ConfigError(Exception):
     pass
+
+
+# Keys that used to mean something and no longer do. Leaving one in place is not
+# fatal -- refusing to start every vault over a notification setting would be a
+# worse failure than the one it prevents -- but it MUST be loud, because the
+# symptom is an alarm that has quietly stopped ringing.
+RETIRED_KEYS = {
+    "ntfy_url": "replaced by notify_command; see contrib/notify-ntfy.sh",
+    "ntfy_token_file": "replaced by notify_command; see contrib/notify-ntfy.sh",
+}
 
 
 # Tailscale hands out 100.64.0.0/10 (CGNAT). Loopback is tighter still. Anything
@@ -56,6 +70,7 @@ class Config:
         merged = dict(DEFAULTS)
         merged.update(data or {})
         self._d = merged
+        self.retired = sorted(key for key in (data or {}) if key in RETIRED_KEYS)
         if not isinstance(self.vaults, dict) or not self.vaults:
             raise ConfigError("config has no vaults")
         for alias, spec in self.vaults.items():

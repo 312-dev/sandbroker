@@ -47,6 +47,17 @@ def _vault(cfg, alias):
 def cmd_serve(args):
     cfg = _load(args)
     log = _log()
+
+    # Say this at startup as well as in doctor. An operator who upgrades and
+    # keeps an old config would otherwise learn that their leak alarm is mute
+    # at the worst possible moment, which is the first time it needed to ring.
+    for key in getattr(cfg, "retired", []):
+        log("WARNING: config key %r is no longer read (%s)"
+            % (key, config_mod.RETIRED_KEYS[key]))
+    if not getattr(cfg, "notify_command", None):
+        log("WARNING: notify_command is not set -- leak alerts will be recorded "
+            "to disk and nobody will be told")
+
     vault = _vault(cfg, args.vault)
     mcp_server = Server(vault, cfg, Alerter(cfg), log=log)
 
@@ -269,6 +280,31 @@ def cmd_doctor(args):
                                      if address else "disabled, unix socket only"))
     except config_mod.ConfigError as exc:
         print("http listener: FAIL %s" % exc)
+        problems += 1
+
+    # An alarm nobody hears is worse than no alarm, because it reads as safety.
+    # This is a counted problem rather than a note for exactly that reason.
+    notify = getattr(cfg, "notify_command", None)
+    if not notify:
+        print("leak notifier: FAIL notify_command is not set -- leak alerts "
+              "will be written to disk and NOBODY WILL BE TOLD")
+        problems += 1
+    else:
+        shown = notify if isinstance(notify, str) else " ".join(notify)
+        print("leak notifier: %s" % shown)
+        if isinstance(notify, (list, tuple)) and notify:
+            target = notify[0]
+        else:
+            target = str(notify).split()[0]
+        # Only checkable when it names a path. A shell one-liner or a command on
+        # PATH is left alone rather than guessed at.
+        if target.startswith("/") and not os.access(target, os.X_OK):
+            print("               FAIL %s is not executable" % target)
+            problems += 1
+
+    for key in getattr(cfg, "retired", []):
+        print("config: FAIL %r is no longer read (%s)"
+              % (key, config_mod.RETIRED_KEYS[key]))
         problems += 1
 
     # Only meaningful when doctor happens to run as root or as the broker; from

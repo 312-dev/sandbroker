@@ -20,8 +20,28 @@
 
   "bind": null,
 
-  "ntfy_url": "http://100.85.183.28:8090/sandbroker-alerts",
-  "ntfy_token_file": "/opt/sandbroker/etc/ntfy.token",
+  "_notify_comment": [
+    "notify_command is how a leak alert reaches you, and it is whatever command",
+    "you want. A string runs under /bin/sh; a list is argv and skips the shell.",
+    "The alert arrives as JSON on stdin and as SANDBROKER_ALERT_* environment",
+    "variables. Exit 0 means delivered; anything else is a failure the sweeper",
+    "retries every 15 minutes until a human acknowledges the alert on the host.",
+    "",
+    "Nothing the agent wrote is ever placed in the command line, so a hostile",
+    "`detail` string cannot become shell.",
+    "",
+    "Leave it null and alerts are still recorded to disk, but no one is told.",
+    "`sandbroker doctor` reports that as a problem, because an alarm nobody",
+    "hears is worse than no alarm at all.",
+    "",
+    "Examples:",
+    "  \"notify_command\": \"/opt/sandbroker/contrib/notify-ntfy.sh\"",
+    "  \"notify_command\": \"notify-send -u critical \\\"$SANDBROKER_ALERT_TITLE\\\"\"",
+    "  \"notify_command\": [\"/usr/local/bin/page-me\", \"--severity\", \"high\"]",
+    "  \"notify_command\": \"jq -c . >> /var/log/sandbroker-leaks.jsonl\""
+  ],
+
+  "notify_command": "/opt/sandbroker/contrib/notify-ntfy.sh",
 
   "max_output_bytes": 1048576,
   "default_timeout": 60,
@@ -38,12 +58,19 @@
     "so gating them would add friction without adding safety."
   ],
 
+  "_vault_naming_comment": [
+    "The key is the ALIAS the agent sees; `vault` is the real name in 1Password.",
+    "They differ on purpose: the alias survives a vault rename, and the real",
+    "naming never appears in agent-visible strings. `token` is a FILENAME under",
+    "tokens_dir, not a token."
+  ],
+
   "vaults": {
-    "Dev":        {"vault": "312.dev - Dev",        "token": "Dev",        "port": 8770},
-    "Staging":    {"vault": "312.dev - Staging",    "token": "Staging",    "port": 8771},
-    "Production": {"vault": "312.dev - Production", "token": "Production", "port": 8772,
+    "Dev":        {"vault": "Acme - Dev",        "token": "Dev",        "port": 8770},
+    "Staging":    {"vault": "Acme - Staging",    "token": "Staging",    "port": 8771},
+    "Production": {"vault": "Acme - Production", "token": "Production", "port": 8772,
                    "require_unlock": true},
-    "Infra":      {"vault": "312.dev - Infra",      "token": "Infra",      "port": 8773,
+    "Infra":      {"vault": "Acme - Infra",      "token": "Infra",      "port": 8773,
                    "require_unlock": true}
   }
 }

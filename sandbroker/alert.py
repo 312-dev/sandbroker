@@ -1,4 +1,5 @@
-"""Leak alerting: shout via ntfy, and keep shouting until a human says stop.
+"""Leak alerting: shout through a command of the operator's choosing, and keep
+shouting until a human says stop.
 
 The broker's filter only removes secrets it resolved itself. A credential minted
 during a call -- an OAuth access token, a session cookie, a signed URL -- is
@@ -13,16 +14,38 @@ Deliberately absent: any way for the agent to acknowledge. The alerts directory
 is owned by the daemon user with mode 0700, so acknowledging requires being root
 or the daemon user on the box. An agent that could silence its own alarm would
 make the alarm worthless.
+
+WHY THE TRANSPORT IS A COMMAND
+------------------------------
+This module knows nothing about how you want to be told. It execs
+`notify_command` from the config and hands it the alert; whether that ends up as
+a phone push, a desktop notification, a Slack message, an SMS or a line in a log
+is entirely the operator's business. Delivering notifications is not a problem
+this codebase is qualified to have opinions about, and every opinion it held was
+one more thing to keep working.
+
+THE ALERT REACHES THE COMMAND ON STDIN AND IN THE ENVIRONMENT, NEVER IN ARGV
+---------------------------------------------------------------------------
+`detail` and `where` are written by the AGENT. Interpolating agent-authored text
+into a command string would hand the agent shell execution inside the very alarm
+that exists to police it. So the command is taken verbatim from the config, and
+the alert travels separately: the full record as JSON on stdin, and the same
+fields as SANDBROKER_ALERT_* environment variables for scripts that would rather
+not parse. Nothing the agent wrote is ever parsed as code.
 """
 
 import json
 import os
+import subprocess
 import time
-import urllib.error
-import urllib.request
 
 # How stale an open alert has to be before the sweeper pushes it again.
 REPEAT_AFTER = 900  # 15 minutes
+
+# A notifier that hangs must not wedge the report_leak call waiting on it, nor
+# the sweeper behind it. Overshooting this is a failed delivery, which is a
+# retry, which is the behaviour we want anyway.
+NOTIFY_TIMEOUT = 15
 
 
 class Alerter:
@@ -32,44 +55,60 @@ class Alerter:
 
     # -- transport ----------------------------------------------------------
 
-    def _token(self):
-        path = self.config.ntfy_token_file
-        if not path:
-            return None
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                return fh.read().strip() or None
-        except OSError:
-            return None
+    def _notify_env(self, record, title, body):
+        """The alert as environment variables, for scripts that skip the JSON.
 
-    def push(self, title, body, priority="urgent", tags="rotating_light"):
-        """Fire one notification. Returns True on delivery.
+        Values are passed through execve, so they are never word-split, globbed
+        or re-parsed by a shell. An agent that writes `; rm -rf /` into `detail`
+        produces a notification containing that text and nothing more.
+        """
+        env = dict(os.environ)
+        env.update({
+            "SANDBROKER_ALERT_ID": str(record.get("id") or ""),
+            "SANDBROKER_ALERT_VAULT": str(record.get("vault") or ""),
+            "SANDBROKER_ALERT_WHERE": str(record.get("where") or ""),
+            "SANDBROKER_ALERT_DETAIL": str(record.get("detail") or ""),
+            "SANDBROKER_ALERT_REPORTED_BY": str(record.get("reported_by") or ""),
+            "SANDBROKER_ALERT_CREATED": str(record.get("created") or ""),
+            "SANDBROKER_ALERT_PUSHES": str(record.get("pushes") or 0),
+            "SANDBROKER_ALERT_TITLE": title,
+            "SANDBROKER_ALERT_BODY": body,
+        })
+        return env
+
+    def push(self, record, title, body):
+        """Run the notify command for one alert. Returns True on delivery.
 
         Never raises: an alert that cannot be delivered must not also take down
         the call that was trying to report a problem. Delivery failure is
         recorded on the alert record instead, and the sweeper will retry.
+
+        Delivery means the command exited zero. A notifier that cannot reach its
+        service should exit non-zero so the sweeper keeps trying; one that exits
+        zero is asserting the human was told.
         """
-        url = self.config.ntfy_url
-        if not url:
+        command = getattr(self.config, "notify_command", None)
+        if not command:
             return False
-        request = urllib.request.Request(
-            url,
-            data=body.encode("utf-8"),
-            method="POST",
-            headers={
-                "Title": title,
-                "Priority": priority,
-                "Tags": tags,
-            },
-        )
-        token = self._token()
-        if token:
-            request.add_header("Authorization", "Bearer %s" % token)
+        # A list is argv and skips the shell entirely, which is the better form.
+        # A string gets /bin/sh so an operator can write a pipeline in one line.
+        if isinstance(command, (list, tuple)):
+            argv, shell = [str(part) for part in command], False
+        else:
+            argv, shell = str(command), True
         try:
-            with urllib.request.urlopen(request, timeout=10) as resp:
-                return 200 <= resp.status < 300
-        except (urllib.error.URLError, OSError, ValueError):
+            proc = subprocess.run(
+                argv,
+                shell=shell,
+                input=json.dumps(record, sort_keys=True).encode("utf-8"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=self._notify_env(record, title, body),
+                timeout=NOTIFY_TIMEOUT,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
             return False
+        return proc.returncode == 0
 
     # -- persistence --------------------------------------------------------
 
@@ -122,7 +161,13 @@ class Alerter:
         return record, delivered
 
     def notify(self, record):
-        """Push one alert record and stamp the attempt onto it."""
+        """Push one alert record and stamp the attempt onto it.
+
+        The title and body are rendered here rather than left to the notifier so
+        that every transport says the same thing, including the ack command. A
+        notifier that wants to build its own message has the structured record
+        on stdin and can ignore both.
+        """
         title = "SANDBROKER LEAK: %s" % (record.get("vault") or "unknown vault")
         body = (
             "A live credential was seen in broker output.\n\n"
@@ -137,7 +182,7 @@ class Alerter:
                record.get("reported_by") or "(unknown agent)",
                record["id"], REPEAT_AFTER // 60, record["id"])
         )
-        delivered = self.push(title, body)
+        delivered = self.push(record, title, body)
         record["last_push"] = int(time.time())
         record["pushes"] = int(record.get("pushes", 0)) + 1
         record["last_delivered"] = bool(delivered)
