@@ -56,6 +56,10 @@ def _base_env():
     Built from scratch rather than inherited: the daemon's own environment holds
     the 1Password service-account token, and nothing downstream should ever see
     it. Only what a command plausibly needs to function is passed through.
+
+    A Keeper-backed daemon keeps its credential in a file rather than the
+    environment, which this does nothing about -- the command runs as the broker
+    user and could read that file. The redactor is what covers it.
     """
     env = {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
@@ -110,11 +114,16 @@ def run(vault, config, command, secrets=None, timeout=None, cwd=None, stdin=None
         except VaultError as exc:
             raise RunError("could not resolve %s (%s): %s" % (name, ref, exc))
 
-    # The service-account token is not a requested secret, but it opens every
-    # one of them, so it goes into the scrubber regardless.
+    # The backend's own credential is not a requested secret, but it opens every
+    # one of them, so it goes into the scrubber regardless. 1Password's is a
+    # single token and arrives through service_account_token(). Keeper's is a
+    # JSON document holding several strings, each of which opens the vault on
+    # its own, so that backend hands over a labelled set and the single-value
+    # hook is skipped as a duplicate.
     scrub_targets = dict(resolved)
+    scrub_targets.update(getattr(vault, "auth_secrets", dict)())
     sa_token = vault.service_account_token()
-    if sa_token:
+    if sa_token and sa_token not in scrub_targets.values():
         scrub_targets["OP_SERVICE_ACCOUNT_TOKEN"] = sa_token
 
     env = _base_env()

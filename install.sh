@@ -8,10 +8,12 @@
 # path, and there is no separate upgrade script to keep in sync.
 #
 # WHAT IT NEVER TOUCHES
-#   $VAR_DIR/tokens        the 1Password service-account tokens
+#   $VAR_DIR/tokens        each vault's backend credential: a 1Password
+#                          service-account token, or a Keeper Commander config
 #   $ETC_DIR/ntfy.token    the alert transport token
-# Those are provisioned once, by hand, and losing them means re-issuing service
-# accounts. Nothing here writes or deletes them, on any code path.
+# Those are provisioned once, by hand, and losing them means re-issuing a
+# service account or re-approving a Keeper device. Nothing here writes or
+# deletes them, on any code path.
 
 set -euo pipefail
 
@@ -142,7 +144,7 @@ import json, sys
 with open(sys.argv[1]) as fh:
     print(json.load(fh)["vaults"][sys.argv[2]]["token"])' "$CONFIG" "$vault")"
   if [ ! -f "$VAR_DIR/tokens/$token_name.token" ]; then
-    warn "vault $vault has no service-account token installed; skipping"
+    warn "vault $vault has no backend credential installed; skipping"
     systemctl disable --now "sandbroker@$vault" >/dev/null 2>&1 || true
     continue
   fi

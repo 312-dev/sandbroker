@@ -88,6 +88,13 @@ task, and the alert repeats until a human acknowledges it on the host.
 Anything running as `root` or as the broker user can read the service-account
 tokens directly. sandbroker is not a defence against local compromise.
 
+Commands run *by* the broker run as the broker user, so a command can read those
+files too. That is why the backend's own credential goes into the redactor
+alongside the secrets the agent asked for: it is not a value anyone requested,
+but it opens every value, and `cat` on a token file is a thing that happens by
+accident. A Keeper config holds up to four such strings rather than one, and all
+of them are registered.
+
 ### Files written to disk
 
 `PrivateTmp=yes` means a command cannot leave a file in `/tmp` for the agent to
@@ -126,10 +133,29 @@ internet.
 
 ## Vault isolation
 
-One process per vault, each opening exactly one service-account token. A ref for
-another vault is refused by the server that receives it, and there is no code
-path by which the Dev process could resolve a Production reference -- it does not
-hold the token.
+One process per vault, each opening exactly one credential. A ref for another
+vault is refused by the server that receives it, and there is no code path by
+which the Dev process could resolve a Production reference -- it does not hold
+the token.
+
+On 1Password the second half of that is enforced by 1Password: a service-account
+token is issued against named vaults and cannot address anything else, so even a
+broker bug cannot reach past it.
+
+**Keeper is weaker here, and the difference is structural rather than
+incidental.** A Keeper account has one vault; the shared folder a daemon serves
+is a scope *within* it, and Commander authenticates as the user who owns the
+whole thing. `keeper get <uid>` will return a record from any folder that user
+can see. sandbroker enforces the folder boundary itself -- every read resolves
+the item against a listing of the configured folder and refuses a uid the
+listing does not contain -- but that is a check in `keeper.py`, not something the
+vault refuses. A bug in that check is a cross-folder read.
+
+The mitigation is deployment, not code: give each Keeper-backed daemon its own
+Keeper account holding nothing but the folder it serves, and the boundary is
+back where 1Password puts it. Anyone unwilling to run an account per vault
+should treat a Keeper-backed vault as sharing a blast radius with every other
+folder that account can see.
 
 The agent-visible effect is that each vault is a separate MCP server with its own
 tool namespace (`mcp__sandbroker-dev__run` versus
@@ -147,3 +173,5 @@ governable by tool permissions.
 | Agent deliberately exfiltrates | **Not addressed.** Out of scope by decision. |
 | Host or root compromise | **Not addressed.** Out of scope. |
 | Broker unreachable / misconfigured | **Fails closed.** No secret is resolved. |
+| Cross-vault read, 1Password | **Addressed.** The token cannot address another vault. |
+| Cross-vault read, Keeper | **Addressed in code, not by the vault.** One account per daemon is the real control. |

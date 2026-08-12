@@ -10,8 +10,17 @@ import os
 
 DEFAULT_PATH = os.environ.get("SANDBROKER_CONFIG", "/opt/sandbroker/etc/sandbroker.json")
 
+# Backends a vault may be served from. A vault that names none is 1Password, so
+# every config written before Keeper existed keeps working untouched.
+BACKENDS = ("1password", "keeper")
+DEFAULT_BACKEND = "1password"
+
 DEFAULTS = {
     "op_bin": "/usr/local/bin/op",
+    "keeper_bin": "/usr/local/bin/keeper",
+    # Keeper Commander rotates its clone code and caches the vault as it runs,
+    # so unlike `op` it needs somewhere writable of its own.
+    "keeper_state_dir": "/opt/sandbroker/var/keeper",
     "tokens_dir": "/opt/sandbroker/var/tokens",
     "socket_dir": "/opt/sandbroker/run",
     "alerts_dir": "/opt/sandbroker/var/alerts",
@@ -62,6 +71,11 @@ class Config:
             for key in ("vault", "token"):
                 if not spec.get(key):
                     raise ConfigError("vault %s is missing %r" % (alias, key))
+            backend = spec.get("backend") or DEFAULT_BACKEND
+            if backend not in BACKENDS:
+                raise ConfigError("vault %s names backend %r, which does not "
+                                  "exist (known: %s)"
+                                  % (alias, backend, ", ".join(BACKENDS)))
 
     def __getattr__(self, name):
         try:
@@ -78,7 +92,16 @@ class Config:
             raise ConfigError("unknown vault %r (known: %s)"
                               % (alias, ", ".join(sorted(self.vaults))))
 
+    def backend(self, alias):
+        return self.vault(alias).get("backend") or DEFAULT_BACKEND
+
     def token_file(self, alias):
+        """The file that authenticates this vault's backend.
+
+        One name for two things: a 1Password service-account token, or a Keeper
+        Commander config. Both are the single credential the daemon opens, and
+        both live under the same 0700 directory, so they share the accessor.
+        """
         return os.path.join(self.tokens_dir, "%s.token" % self.vault(alias)["token"])
 
     def socket_path(self, alias):

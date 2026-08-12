@@ -20,8 +20,9 @@ from . import locks
 from . import mcp
 from . import server as server_mod
 from .alert import Alerter
+from .keeper import Vault as KeeperVault
 from .mcp import Server
-from .onepassword import Vault
+from .onepassword import Vault as OnePasswordVault
 
 
 def _log(stream=sys.stderr):
@@ -37,9 +38,17 @@ def _load(args):
 
 
 def _vault(cfg, alias):
+    """The one place a backend is chosen. Everything downstream -- the runner,
+    the MCP surface, the server -- takes whatever this returns and asks it the
+    same five questions."""
     spec = cfg.vault(alias)
-    return Vault(alias=alias, real_name=spec["vault"],
-                 token_file=cfg.token_file(alias), op_bin=cfg.op_bin)
+    if cfg.backend(alias) == "keeper":
+        return KeeperVault(alias=alias, real_name=spec["vault"],
+                           token_file=cfg.token_file(alias),
+                           keeper_bin=cfg.keeper_bin,
+                           state_dir=cfg.keeper_state_dir)
+    return OnePasswordVault(alias=alias, real_name=spec["vault"],
+                            token_file=cfg.token_file(alias), op_bin=cfg.op_bin)
 
 
 # -- serve ------------------------------------------------------------------
@@ -61,7 +70,8 @@ def cmd_serve(args):
         log("bind is set but vault %s has no port; HTTP listener skipped"
             % args.vault)
 
-    log("serving vault %s (1Password: %s)" % (vault.alias, vault.real_name))
+    log("serving vault %s (%s: %s)"
+        % (vault.alias, vault.backend_label, vault.real_name))
     server_mod.run_forever(listeners)
     return 0
 
@@ -244,10 +254,10 @@ def _probe(socket_path, message, timeout=20):
 def cmd_doctor(args):
     """Check the install end to end without ever resolving a value.
 
-    Everything here is metadata: config, the op binary, a live handshake with
-    each daemon, and optionally an item listing. `op item list` cannot return a
-    field value, so a green --deep run proves the whole path works without a
-    single secret being read.
+    Everything here is metadata: config, the backend binaries, a live handshake
+    with each daemon, and optionally an item listing. Neither `op item list` nor
+    `keeper ls` can return a field value, so a green --deep run proves the whole
+    path works without a single secret being read.
     """
     problems = 0
     try:
@@ -257,11 +267,17 @@ def cmd_doctor(args):
         return 1
     print("config: %s" % cfg.path)
 
-    if not (os.path.isfile(cfg.op_bin) and os.access(cfg.op_bin, os.X_OK)):
-        print("op cli: FAIL not executable at %s" % cfg.op_bin)
-        problems += 1
-    else:
-        print("op cli: ok (%s)" % cfg.op_bin)
+    # Only the backends actually in use. A 1Password-only install should not be
+    # told off for having no Keeper CLI, and vice versa.
+    binaries = {"1password": ("op cli", cfg.op_bin),
+                "keeper": ("keeper cli", cfg.keeper_bin)}
+    for backend in sorted(set(cfg.backend(a) for a in cfg.vaults)):
+        label, binary = binaries[backend]
+        if not (os.path.isfile(binary) and os.access(binary, os.X_OK)):
+            print("%s: FAIL not executable at %s" % (label, binary))
+            problems += 1
+        else:
+            print("%s: ok (%s)" % (label, binary))
 
     try:
         address = cfg.bind_address()
@@ -278,7 +294,8 @@ def cmd_doctor(args):
 
     for alias in sorted(cfg.vaults):
         sock = cfg.socket_path(alias)
-        bits = []
+        keeper = cfg.backend(alias) == "keeper"
+        bits = ["keeper"] if keeper else []
 
         if not os.path.exists(sock):
             bits.append("socket DOWN (systemctl status sandbroker@%s)" % alias)
@@ -294,8 +311,11 @@ def cmd_doctor(args):
                 bits.append("daemon up")
 
         if tokens_visible:
-            bits.append("token %s"
-                        % ("present" if os.path.exists(cfg.token_file(alias))
+            # Same file, two different things in it: a service-account token or
+            # a Commander config. Naming which one keeps the fix obvious.
+            bits.append("%s %s"
+                        % ("config" if keeper else "token",
+                           "present" if os.path.exists(cfg.token_file(alias))
                            else "MISSING"))
             if not os.path.exists(cfg.token_file(alias)):
                 problems += 1
@@ -311,17 +331,18 @@ def cmd_doctor(args):
                                        "method": "tools/call",
                                        "params": {"name": "list_items",
                                                   "arguments": {}}}, timeout=45)
+            backend_label = "Keeper" if keeper else "1Password"
             result = (reply or {}).get("result") or {}
             if err or result.get("isError") or "content" not in result:
                 detail = err or (result.get("content") or [{}])[0].get("text", "failed")
-                bits.append("1Password FAIL (%s)" % str(detail)[:80])
+                bits.append("%s FAIL (%s)" % (backend_label, str(detail)[:80]))
                 problems += 1
             else:
                 try:
                     count = len(json.loads(result["content"][0]["text"])["items"])
                     bits.append("%d item(s)" % count)
                 except (ValueError, KeyError, IndexError):
-                    bits.append("1Password ok, unreadable listing")
+                    bits.append("%s ok, unreadable listing" % backend_label)
 
         print("vault %-12s %s" % (alias, "; ".join(bits)))
 
@@ -388,7 +409,7 @@ def main(argv=None):
 
     doctor = sub.add_parser("doctor", help="check the install")
     doctor.add_argument("--deep", action="store_true",
-                        help="also list items from 1Password (still no values)")
+                        help="also list items from each vault (still no values)")
     doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)

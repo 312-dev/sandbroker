@@ -18,6 +18,8 @@ class FakeVault:
     """Stands in for 1Password so the suite never needs a vault or a network."""
 
     alias = "Dev"
+    ref_scheme = "op"
+    default_field = "credential"
 
     def __init__(self, values=None, sa_token=None):
         self.values = values or {"op://Dev/item/credential": SECRET}
