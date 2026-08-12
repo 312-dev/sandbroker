@@ -75,6 +75,15 @@ sandbroker doctor
 
 ## Keeper
 
+**This backend has never been run against a live Keeper account.** The flags it
+uses are all in Commander's own argument parsers, but two things are inference
+rather than documentation, and the parsing is deliberately forgiving because of
+it: that `ls --recursive` keeps the same JSON row shape as a flat listing, and
+that a failed command exits non-zero. The second one matters more, because a
+Commander that exits `0` on failure would turn an error into an empty listing.
+Try it against a throwaway folder first. The 1Password backend is the one in
+daily use.
+
 A vault is served from 1Password unless it says otherwise. Add `"backend":
 "keeper"` and it is served from Keeper instead:
 
