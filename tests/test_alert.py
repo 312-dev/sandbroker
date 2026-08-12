@@ -15,7 +15,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sandbroker.alert import Alerter  # noqa: E402
+from sandbroker.alert import Alerter, AlertsUnreadable  # noqa: E402
 from sandbroker.config import Config  # noqa: E402
 
 
@@ -164,6 +164,45 @@ class TestStickiness(AlertTestCase):
             record["last_push"] = 0
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(record, fh)
+
+
+class TestUnreadableIsNotEmpty(AlertTestCase):
+    """`sandbroker alerts` reported "no open leak alerts" when run by a user who
+    could not read the 0700 broker-owned directory. An alarm that answers "none"
+    to a question it did not ask is worse than one that errors."""
+
+    def test_missing_directory_is_genuinely_zero(self):
+        # Created on the first alert raised, so absent really does mean none.
+        cfg = make_config(self.tmp)
+        self.assertEqual([], Alerter(cfg).open_alerts())
+
+    def test_unreadable_directory_raises_instead_of_claiming_none(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads through mode bits, so this cannot fail here")
+        cfg = make_config(self.tmp, notify_command="true")
+        alerter = Alerter(cfg)
+        record, _ = alerter.raise_alert("Dev", "where", "detail")
+        self.assertEqual([record["id"]], [r["id"] for r in alerter.open_alerts()])
+
+        os.chmod(cfg.alerts_dir, 0o000)
+        try:
+            with self.assertRaises(AlertsUnreadable):
+                alerter.open_alerts()
+        finally:
+            os.chmod(cfg.alerts_dir, 0o700)
+
+    def test_sweep_cannot_silently_repush_nothing(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads through mode bits, so this cannot fail here")
+        cfg = make_config(self.tmp, notify_command="true")
+        alerter = Alerter(cfg)
+        alerter.raise_alert("Dev", "where", "detail")
+        os.chmod(cfg.alerts_dir, 0o000)
+        try:
+            with self.assertRaises(AlertsUnreadable):
+                alerter.sweep()
+        finally:
+            os.chmod(cfg.alerts_dir, 0o700)
 
 
 class TestRetiredKeys(unittest.TestCase):

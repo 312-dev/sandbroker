@@ -283,9 +283,13 @@ Full reasoning in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
 **re-fires every 15 minutes until a human acknowledges it on the host**:
 
 ```bash
-sandbroker alerts          # what is open
+sudo sandbroker alerts     # what is open
 sudo sandbroker ack <id>   # stop the nagging
 ```
+
+Both need root, because the alerts directory is `0700` and owned by the broker.
+Run `alerts` as yourself and it says so and exits `2`; it will not tell you there
+are none, because it has not looked.
 
 No tool can acknowledge an alert. The alerts directory is `0700` and owned by the
 broker user, so acknowledging requires host access. An agent that could silence

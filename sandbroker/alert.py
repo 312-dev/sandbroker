@@ -48,6 +48,12 @@ REPEAT_AFTER = 900  # 15 minutes
 NOTIFY_TIMEOUT = 15
 
 
+class AlertsUnreadable(Exception):
+    """This uid cannot see the alerts directory, so it cannot answer the
+    question. Distinct from finding it empty, and the two must never render the
+    same way: one means nothing is wrong, the other means nobody knows."""
+
+
 class Alerter:
     def __init__(self, config):
         self.config = config
@@ -119,10 +125,28 @@ class Alerter:
         return os.path.join(self.dir, "%s.json" % alert_id)
 
     def open_alerts(self):
+        """Every unacknowledged alert.
+
+        An empty list means there are none. It must never also mean "I could not
+        look", which is what returning [] on any OSError used to do: the alerts
+        directory is 0700 and owned by the broker, so `sandbroker alerts` run by
+        an ordinary user hit PermissionError and cheerfully reported no open
+        alerts while a real one sat there unread.
+
+        A missing directory genuinely is zero alerts -- it is created on the
+        first one raised. Anything else is a failure to see, and the caller has
+        to be told the difference.
+        """
         try:
             names = sorted(os.listdir(self.dir))
-        except OSError:
+        except FileNotFoundError:
             return []
+        except OSError as exc:
+            raise AlertsUnreadable(
+                "cannot read %s (%s). It is 0700 and owned by the broker, so "
+                "this must run as root or the broker user -- and until it does, "
+                "whether any alert is open is UNKNOWN, not none."
+                % (self.dir, exc.strerror or exc))
         out = []
         for name in names:
             if not name.endswith(".json"):

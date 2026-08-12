@@ -19,7 +19,7 @@ from . import config as config_mod
 from . import locks
 from . import mcp
 from . import server as server_mod
-from .alert import Alerter
+from .alert import Alerter, AlertsUnreadable
 from .keeper import Vault as KeeperVault
 from .mcp import Server
 from .onepassword import Vault as OnePasswordVault
@@ -126,7 +126,15 @@ def cmd_bridge(args):
 
 def cmd_sweep(args):
     cfg = _load(args)
-    count = Alerter(cfg).sweep()
+    try:
+        count = Alerter(cfg).sweep()
+    except AlertsUnreadable as exc:
+        # The sweeper is what makes an alert sticky. If it cannot read the
+        # directory it re-pushes nothing, so it has to fail the unit rather than
+        # exit 0 and let `systemctl status` show a timer that is working.
+        sys.stderr.write("sandbroker: sweep found nothing because it could not "
+                         "look: %s\n" % exc)
+        return 1
     if count:
         sys.stderr.write("sandbroker: re-pushed %d open leak alert(s)\n" % count)
     return 0
@@ -219,7 +227,13 @@ def cmd_locks(args):
 
 def cmd_alerts(args):
     cfg = _load(args)
-    open_alerts = Alerter(cfg).open_alerts()
+    try:
+        open_alerts = Alerter(cfg).open_alerts()
+    except AlertsUnreadable as exc:
+        # Exit non-zero: "I cannot tell" is not "all clear", and a script that
+        # gates on this command must not read it as one.
+        sys.stderr.write("sandbroker: %s\n" % exc)
+        return 2
     if not open_alerts:
         print("no open leak alerts")
         return 0
@@ -386,12 +400,22 @@ def cmd_doctor(args):
         print("\n(tokens are 0700 and owned by the broker, so this uid cannot "
               "see them -- that is correct. `doctor --deep` proves they work.)")
 
-    open_alerts = Alerter(cfg).open_alerts()
-    if open_alerts:
-        print("leak alerts: %d OPEN -- run `sandbroker alerts`" % len(open_alerts))
-        problems += 1
+    try:
+        open_alerts = Alerter(cfg).open_alerts()
+    except AlertsUnreadable:
+        # Not counted as a problem: running doctor as yourself is the normal
+        # case and the tokens line above already explains why this uid cannot
+        # see broker-owned state. Saying UNKNOWN is the whole fix -- what must
+        # never happen is printing "none open" without having looked.
+        print("leak alerts: UNKNOWN -- this uid cannot read %s; "
+              "re-run as root to find out" % cfg.alerts_dir)
     else:
-        print("leak alerts: none open")
+        if open_alerts:
+            print("leak alerts: %d OPEN -- run `sandbroker alerts`"
+                  % len(open_alerts))
+            problems += 1
+        else:
+            print("leak alerts: none open")
 
     print("\n%s" % ("all good" if not problems else "%d problem(s)" % problems))
     return 1 if problems else 0
