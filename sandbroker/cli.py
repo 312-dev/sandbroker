@@ -400,24 +400,32 @@ def cmd_doctor(args):
         print("\n(tokens are 0700 and owned by the broker, so this uid cannot "
               "see them -- that is correct. `doctor --deep` proves they work.)")
 
+    unchecked = False
     try:
         open_alerts = Alerter(cfg).open_alerts()
     except AlertsUnreadable:
-        # Not counted as a problem: running doctor as yourself is the normal
-        # case and the tokens line above already explains why this uid cannot
-        # see broker-owned state. Saying UNKNOWN is the whole fix -- what must
-        # never happen is printing "none open" without having looked.
+        # Not a problem in itself -- running doctor as yourself is the normal
+        # case -- but it must not disappear into an "all good" either. This box
+        # carried five unacknowledged alerts for six days while every
+        # unprivileged doctor run said none open and all good.
+        unchecked = True
         print("leak alerts: UNKNOWN -- this uid cannot read %s; "
               "re-run as root to find out" % cfg.alerts_dir)
     else:
         if open_alerts:
-            print("leak alerts: %d OPEN -- run `sandbroker alerts`"
+            print("leak alerts: %d OPEN -- run `sudo sandbroker alerts`"
                   % len(open_alerts))
             problems += 1
         else:
             print("leak alerts: none open")
 
-    print("\n%s" % ("all good" if not problems else "%d problem(s)" % problems))
+    if problems:
+        summary = "%d problem(s)" % problems
+    elif unchecked:
+        summary = "no problems found, but leak alerts were NOT checked"
+    else:
+        summary = "all good"
+    print("\n%s" % summary)
     return 1 if problems else 0
 
 
