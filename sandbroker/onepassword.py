@@ -15,6 +15,8 @@ import json
 import re
 import subprocess
 
+from .redact import fingerprint
+
 REF_RE = re.compile(r"^op://(?P<vault>[^/]+)/(?P<item>[^/]+)(?:/(?P<field>.+))?$")
 
 # The default when a ref names an item but no field. 1Password's own convention
@@ -80,10 +82,21 @@ class Vault:
         env["OP_SERVICE_ACCOUNT_TOKEN"] = self._token_value()
         return env
 
-    def _run(self, argv, timeout=None):
+    def _run(self, argv, timeout=None, stdin_data=None):
+        """Run one op invocation.
+
+        `stdin_data` exists so a secret can reach op without ever being an
+        argument. /proc/<pid>/cmdline is world-readable, so an assignment
+        statement on argv is visible to every process on the box for as long as
+        the call runs -- op's own help warns about this and points at templates
+        for exactly that reason. Two of the open leak alerts are credentials
+        found sitting in a command line, so this is a demonstrated failure mode
+        here, not a theoretical one.
+        """
         try:
             proc = subprocess.run(
                 argv,
+                input=stdin_data,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,   # op echoes refs and vault context
                 env=self._env(),
@@ -174,6 +187,63 @@ class Vault:
         raise VaultError(
             "item %r has no field %r with a value set (list_fields shows what "
             "it does have)" % (item, field))
+
+    # -- writing (create-or-add only) ---------------------------------------
+
+    def _item_json(self, item):
+        """The item as a dict, or None if this vault has no such item."""
+        try:
+            out = self._run([self.op_bin, "item", "get", item,
+                             "--vault", self.real_name, "--format", "json"],
+                            timeout=30)
+        except VaultError:
+            return None
+        try:
+            data = json.loads(out)
+        except ValueError:
+            raise VaultError("could not parse the item")
+        return data if isinstance(data, dict) else None
+
+    def write(self, ref, value):
+        """Store a NEW value at ref and return its fingerprint, never the value.
+
+        CREATE OR ADD ONLY. If the field already holds a value this refuses,
+        and that refusal is the point rather than an inconvenience. A broker
+        that can overwrite is a broker that can destroy every good credential in
+        the vault on one bad call, which would turn a compromised agent into an
+        outage. Retiring a superseded value stays a human action.
+
+        The value travels on stdin as a JSON template, never as an assignment
+        argument, so it is never present in the process table. op's own help
+        recommends exactly this for sensitive values.
+        """
+        item, field = self.parse_ref(ref)
+        if not value:
+            raise VaultError("refusing to store an empty value")
+
+        existing = self._item_json(item)
+        new_field = {"label": field, "type": "CONCEALED", "value": value}
+
+        if existing is None:
+            template = {"title": item,
+                        "category": "API_CREDENTIAL",
+                        "fields": [new_field]}
+            argv = [self.op_bin, "item", "create",
+                    "--vault", self.real_name, "--format", "json"]
+        else:
+            for entry in existing.get("fields") or []:
+                if field in (entry.get("label"), entry.get("id")) and entry.get("value"):
+                    raise VaultError(
+                        "field %r on item %r already holds a value; store is "
+                        "create-or-add only" % (field, item))
+            template = dict(existing)
+            template["fields"] = list(existing.get("fields") or []) + [new_field]
+            argv = [self.op_bin, "item", "edit", item,
+                    "--vault", self.real_name, "--format", "json"]
+
+        self._run(argv, stdin_data=json.dumps(template).encode("utf-8"),
+                  timeout=30)
+        return fingerprint(value)
 
     # -- discovery (metadata only, structurally value-free) -----------------
 

@@ -232,6 +232,18 @@ _BENIGN_HEX_LENGTHS = frozenset({40, 64})
 _ENTROPY_FLOOR = 3.2
 
 
+def fingerprint(text):
+    """Short, stable, printable identifier for a value.
+
+    This is what makes verification possible without disclosure: the same secret
+    fingerprints identically wherever it is checked, so the vault copy, the copy
+    in a Nomad variable and the one a live service presents can be confirmed
+    identical without any of them being shown.
+    """
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+    return digest[:12]
+
+
 def _shannon_bits_per_char(text):
     """Shannon entropy in bits per character.
 
@@ -284,11 +296,7 @@ class HeuristicRedactor:
         broker never injected reached the boundary."""
         return self._count
 
-    @staticmethod
-    def fingerprint(text):
-        """Short, stable identifier for a value, safe to print."""
-        digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-        return digest[:12]
+    fingerprint = staticmethod(fingerprint)
 
     def _placeholder(self, matched):
         return "[likely-credential:sha256=%s,len=%d]" % (
