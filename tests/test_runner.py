@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sandbroker import runner  # noqa: E402
 from sandbroker.config import Config  # noqa: E402
-from sandbroker.onepassword import VaultError  # noqa: E402
+from sandbroker.onepassword import VaultError
+from sandbroker.redact import fingerprint  # noqa: E402
 from sandbroker.runner import RunError  # noqa: E402
 
 SECRET = "tok_live_ABCDEF0123456789abcdef"
@@ -37,6 +38,18 @@ class FakeVault:
 
     def service_account_token(self):
         return self._sa
+
+    def write(self, ref, value):
+        """Mirrors the real create-or-add-only rule, including the refusal."""
+        if not ref.startswith("op://"):
+            ref = "op://Dev/%s" % ref
+        if ref.count("/") == 3:
+            ref += "/credential"
+        if self.values.get(ref):
+            raise VaultError("field already holds a value; store is "
+                             "create-or-add only")
+        self.values[ref] = value
+        return fingerprint(value)
 
     # Metadata only, mirroring the real Vault: titles and field labels, never a
     # value. Present so tests can assert that listing is not gated.

@@ -1,4 +1,4 @@
-"""The MCP surface: four tools, one vault, no ceremony.
+"""The MCP surface: five tools, one vault, no ceremony.
 
 Hand-rolled JSON-RPC rather than the MCP SDK. The protocol subset a tools-only
 server needs is small enough that a dependency would cost more in upgrade churn
@@ -8,6 +8,7 @@ place to keep the dependency count at zero.
 
 import json
 import traceback
+from secrets import token_urlsafe
 
 from . import locks
 from . import runner
@@ -114,6 +115,70 @@ def tool_definitions(alias, scheme="op", default_field="credential"):
                     },
                 },
                 "required": ["item"],
+            },
+        },
+        {
+            "name": "store",
+            "description": (
+                "Put a NEW credential into the %s vault without ever seeing it. "
+                "This is the write half of `run`: use it when you have just "
+                "rotated something and the new value needs to land somewhere.\n\n"
+                "You never handle the value. The broker mints or captures it, "
+                "writes it to the vault, and returns only a fingerprint and a "
+                "length. Two sources:\n\n"
+                "  source \"command\": the broker runs your command and takes its "
+                "stdout as the value. Use this for a provider API that mints a "
+                "token, and for capturing a value a browser copied:\n"
+                "    command: curl -sS -X POST -H \"Authorization: Bearer $CF_KEY\" "
+                "https://api.cloudflare.com/... | jq -r .result.value\n"
+                "    command: powershell.exe -NoProfile -Command Get-Clipboard\n\n"
+                "  source \"generate\": the broker generates random bytes itself. "
+                "Use this for a secret only you define, such as a session key or "
+                "a signing secret.\n\n"
+                "Stdout of the mint command is NOT returned to you. If the "
+                "command fails, nothing is stored.\n\n"
+                "Writes are create-or-add only. Storing onto a field that "
+                "already holds a value is refused, so rotate into a NEW field or "
+                "a new item and let a human retire the old one. Compare the "
+                "returned fingerprint against the same value elsewhere (a Nomad "
+                "variable, a live service) to prove a rotation took effect "
+                "without anyone reading it." % alias
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": {
+                        "type": "string",
+                        "description": "Where to store it, e.g. "
+                                       "\"%s/my-item/rotated_2026_08\". The "
+                                       "field must not already have a value."
+                                       % qualified,
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["command", "generate"],
+                        "description": "Where the value comes from. Defaults to "
+                                       "\"command\".",
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Required when source is \"command\". Its "
+                                       "stdout becomes the value and is not "
+                                       "returned to you.",
+                    },
+                    "secrets": {
+                        "type": "object",
+                        "description": "Secrets to inject into the mint command, "
+                                       "same form as `run`.",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "bytes": {
+                        "type": "integer",
+                        "description": "Entropy for source \"generate\", 16 to "
+                                       "128. Defaults to 32.",
+                    },
+                },
+                "required": ["ref"],
             },
         },
         {
@@ -249,6 +314,7 @@ class Server:
             "run": self._tool_run,
             "list_items": self._tool_list_items,
             "list_fields": self._tool_list_fields,
+            "store": self._tool_store,
             "report_leak": self._tool_report_leak,
         }
         handler = handlers.get(name)
@@ -286,6 +352,73 @@ class Server:
         self.log("run vault=%s exit=%s redactions=%d"
                  % (self.vault.alias, result["exit_code"], result["redactions"]))
         return _tool_json(result)
+
+    def _tool_store(self, args):
+        # Two gates, not one. store_enabled is a standing per-vault decision
+        # about whether this broker may write at all; the lock is the usual
+        # moment-to-moment gate. Writing is a strictly larger power than
+        # reading, so it is not granted just because reading was.
+        if not self.config.store_enabled(self.vault.alias):
+            return _tool_error(
+                "store is not enabled for %s. Writing is opt-in per vault: a "
+                "human sets \"store_enabled\": true for it in sandbroker.json "
+                "and gives that vault's service account write scope. Ask for "
+                "it rather than looking for another way to write."
+                % self.vault.alias)
+
+        unlocked, _ = locks.status(self.config, self.vault.alias)
+        if not unlocked:
+            return _tool_error(
+                "%s is LOCKED. Nothing will be stored until a human unlocks it "
+                "on the host:\n    sudo sandbroker unlock %s --minutes 30"
+                % (self.vault.alias, self.vault.alias))
+
+        ref = args.get("ref")
+        if not ref:
+            return _tool_error("ref is required")
+
+        source = args.get("source") or "command"
+        if source == "generate":
+            n = args.get("bytes") or 32
+            if not isinstance(n, int) or not 16 <= n <= 128:
+                return _tool_error("bytes must be an integer between 16 and 128")
+            value = token_urlsafe(n)
+        elif source == "command":
+            command = args.get("command")
+            if not command:
+                return _tool_error('command is required when source is "command"')
+            result = runner.run(
+                self.vault,
+                self.config,
+                command=command,
+                secrets=args.get("secrets"),
+                timeout=args.get("timeout"),
+            )
+            # Refuse on a failed mint rather than storing whatever partial
+            # output landed on stdout. A half-written credential stored as if it
+            # were real is worse than an error, because the next step would
+            # cheerfully push it to a live service.
+            if result["exit_code"] != 0:
+                return _tool_error(
+                    "mint command exited %s, so nothing was stored. Its output "
+                    "is not returned; re-run it through `run` if you need to see "
+                    "why it failed." % result["exit_code"])
+            value = (result.get("stdout") or "").strip()
+        else:
+            return _tool_error('source must be "command" or "generate"')
+
+        if not value:
+            return _tool_error("the source produced no value, so nothing was stored")
+
+        fp = self.vault.write(ref, value)
+        self.log("store vault=%s ref=%s source=%s fingerprint=%s len=%d"
+                 % (self.vault.alias, ref, source, fp, len(value)))
+        return _tool_json({"stored": True,
+                           "vault": self.vault.alias,
+                           "ref": ref,
+                           "source": source,
+                           "fingerprint": fp,
+                           "length": len(value)})
 
     def _tool_list_items(self, _args):
         return _tool_json({"vault": self.vault.alias,

@@ -76,12 +76,33 @@ The `client_secret` is scrubbed. The `access_token` is not, because the broker
 has no idea it is a credential. It comes back in the clear and lands in the
 agent's context.
 
-There is no clean fix inside the exact-match rule, and the previous design's
-answer -- a heuristic classifier scoring every field -- traded a hard guarantee
-for a soft one and produced false positives on UUIDs, git SHAs and ordinary
-prose. So: the limit is stated instead of papered over, and `report_leak` is the
-mitigation. Agents are instructed to raise it on sight, before finishing the
-task, and the alert repeats until a human acknowledges it on the host.
+There is no clean fix inside the exact-match rule. The previous design's answer
+-- a heuristic classifier scoring every field -- traded a hard guarantee for a
+soft one and produced false positives on UUIDs, git SHAs and ordinary prose.
+That objection still stands and the guarantee is still not negotiable.
+
+What changed is the frequency. This was an acceptable residual risk while
+minting was an occasional accident. A rotation workload mints a live credential
+on *every* operation, so the rare case becomes the every-call case, and several
+real alerts have now been raised for exactly this.
+
+Two additions, neither of which touches Tier 1:
+
+- **`store`** removes the need to see a minted value at all. The broker runs the
+  mint command, captures stdout, writes it to the vault and returns a
+  fingerprint. The value never enters the context, so there is nothing to
+  detect. This is the real answer for rotation.
+- **Tier 2 redaction** is the safety net for everything else. It is explicitly
+  best-effort, carries a different marker so it can never be mistaken for the
+  guarantee, and its generic entropy pass is **off by default** precisely
+  because shape cannot separate a hex secret from a git SHA. Hex runs of exactly
+  40 or 64 characters are exempt even when it is on, which is a documented hole
+  rather than a silent tuning.
+
+`report_leak` remains the mitigation of record. Agents are instructed to raise
+it on sight, before finishing the task, including on a Tier 2 hit: a heuristic
+catch is evidence a live credential reached the boundary, not proof it was
+contained. The alert repeats until a human acknowledges it on the host.
 
 ### A compromised host
 
@@ -169,7 +190,7 @@ governable by tool permissions.
 |---|---|
 | Credential enters the model context | **Addressed.** The value never leaves the broker. |
 | Command echoes its own credential back | **Addressed.** Redaction catches it, including encoded forms. |
-| Response contains a *new* credential | **Not addressed.** `report_leak` + sticky alerting. |
+| Response contains a *new* credential | **Partly addressed.** `store` keeps a minted value out of the context entirely; Tier 2 redaction catches common shapes best-effort. Neither is a guarantee, so `report_leak` + sticky alerting remain the backstop. |
 | Agent deliberately exfiltrates | **Not addressed.** Out of scope by decision. |
 | Host or root compromise | **Not addressed.** Out of scope. |
 | Broker unreachable / misconfigured | **Fails closed.** No secret is resolved. |

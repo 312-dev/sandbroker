@@ -8,7 +8,7 @@ description: Use a credential, API token, database password, or other secret wit
 You run commands that need credentials. You never see the credentials.
 
 There is one MCP server per vault (`sandbroker-dev`, `sandbroker-production`,
-...). Each exposes four tools. Pick the server for the vault you need; the vault
+...). Each exposes five tools. Pick the server for the vault you need; the vault
 is implied by which server you call.
 
 ## The whole pattern
@@ -66,6 +66,43 @@ It runs under `/bin/sh -c`, so pipes, redirects and `&&` all work.
 - `timeout`, `cwd` and `stdin` are available when you need them.
 - Reserved names (`PATH`, `LD_PRELOAD`, ...) are refused. Use a name like
   `TOKEN`, `API_KEY`, `DB_PASSWORD`.
+
+## Storing a NEW credential: `store`
+
+`run` is vault to command. `store` is the other direction, for when a rotation
+has just produced a value that needs to land somewhere. You still never see it.
+
+```
+store  ref: "op://Production/cloudflare-tunnel/rotated_2026_08"
+       command: 'curl -sS -X POST -H "Authorization: Bearer $CF_KEY" https://api.cloudflare.com/... | jq -r .result.value'
+       secrets: {"CF_KEY": "op://Production/Cloudflare Global API Key/credential"}
+```
+
+The broker runs the command, takes stdout as the value, writes it to the vault,
+and returns `{stored, ref, fingerprint, length}`. **The mint command's stdout is
+never returned to you**, which is the point: a create-token API response is full
+of live credential and nothing would have stripped it.
+
+Other sources:
+
+- `source: "generate"` has the broker generate the value itself. Use it for a
+  secret only you define, such as a session key or a signing secret.
+- To capture what a browser copied, keep `source: "command"` and read the
+  clipboard: `powershell.exe -NoProfile -Command Get-Clipboard`.
+
+**`store` is off unless a vault has been opted in.** Reading and writing are
+different powers and are not granted together, so a vault you can `run` against
+is not necessarily one you can `store` into. If it refuses with "not enabled",
+ask for it and say why; do not look for another way to write.
+
+**Writes are create-or-add only.** Storing onto a field that already holds a
+value is refused. Rotate into a new field or a new item and leave retiring the
+old one to a human, so one bad call can never destroy a working credential.
+
+**The fingerprint is how you verify without looking.** The same value fingerprints
+identically everywhere, so comparing the fingerprint from `store` against one
+computed over a Nomad variable and over what the live service presents proves the
+rotation took, with nobody reading the secret.
 
 ## If a real credential ever appears in output: report it immediately
 

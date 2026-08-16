@@ -29,6 +29,7 @@ One daemon per vault. Four tools. No approvals, no login, no web UI.
 | `run` | Execute a command with secrets in its environment, return scrubbed output |
 | `list_items` | Item titles and references in this vault, never values |
 | `list_fields` | Field names on one item, so any field can be addressed |
+| `store` | Mint or capture a NEW credential into the vault, returning only a fingerprint |
 | `report_leak` | Raise a sticky alarm when a live credential is seen in output |
 
 Any field of any item in the vault is usable. There is no per-field allowlist and

@@ -110,6 +110,17 @@ class Config:
     def backend(self, alias):
         return self.vault(alias).get("backend") or DEFAULT_BACKEND
 
+    def store_enabled(self, alias):
+        """Whether `store` may write into this vault. Off unless asked for.
+
+        Reading and writing are different powers and are not granted together.
+        A read-only broker cannot damage the vault no matter how badly a caller
+        misbehaves; a writing one can, so it is opt-in per vault and needs a
+        service account with write scope anyway. Turn it on only where a
+        rotation is actually being run.
+        """
+        return bool(self.vault(alias).get("store_enabled", False))
+
     def token_file(self, alias):
         """The file that authenticates this vault's backend.
 
