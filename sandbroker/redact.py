@@ -1,19 +1,32 @@
 """Remove secret values from anything on its way back to the caller.
 
-THE ONE GUARANTEE
------------------
+Two filters live here and they make deliberately different promises. Keep them
+apart: the value of the first is that it never guesses, and the value of the
+second is that it does.
+
+TIER 1, `Redactor` -- THE ONE GUARANTEE
+---------------------------------------
 Any byte sequence this process resolved from the vault is stripped out of the
 data returned to the agent. Nothing else. This is a literal-match filter over
-each secret and its common transport encodings.
+each secret and its common transport encodings. It is not a secret detector: it
+has no opinion about values it was never given, and it never fires on something
+that merely resembles a credential. Marker: `[redacted:NAME]`.
 
-WHAT THIS IS NOT
-----------------
-It is not a secret detector. It does not look for things that merely resemble
-credentials, it does not score entropy, and it has no opinion about values it
-was never given. A token minted DURING the call (an OAuth exchange, a session
-cookie handed back by the API) is unknown to this module and will pass through
-untouched. That residual risk is accepted by design, and it is exactly what the
-agent's "if you ever see a live token, raise the alarm" rule is there to cover.
+TIER 2, `HeuristicRedactor` -- BEST EFFORT, NO GUARANTEE
+--------------------------------------------------------
+A token minted DURING the call -- an OAuth exchange, a session cookie, a
+create-tunnel response body -- was never injected, so Tier 1 cannot know it and
+it used to pass through untouched. That was an accepted risk while minting was
+an occasional accident. It stops being acceptable for a workload whose whole job
+is minting credentials, such as a rotation run, where the rare case becomes the
+every-call case.
+
+Tier 2 therefore does guess: it looks for credential-SHAPED strings by prefix
+and by entropy. It will miss things and it will fire on innocent ones. Marker:
+`[likely-credential:sha256=...]`, deliberately different from Tier 1's, so a
+reader can always tell which filter acted and never mistakes a heuristic hit for
+the guarantee. A Tier 2 hit still means `report_leak`: it is evidence a live
+credential reached the boundary, not proof it was contained.
 
 WHY ENCODINGS
 -------------
@@ -27,8 +40,10 @@ applied to the same bytes after a reversible transform.
 
 import base64
 import binascii
+import hashlib
 import html
 import json
+import math
 import re
 import urllib.parse
 
@@ -175,3 +190,134 @@ class Redactor:
         """Full pipeline for one captured stream: bytes pass, decode, string pass."""
         scrubbed = self.scrub_bytes(data)
         return self.scrub(scrubbed.decode("utf-8", "replace"))
+
+
+# Vendor prefixes that are credential-shaped on sight. These are near-zero false
+# positive: no ordinary output contains "sk-ant-api03-" followed by 90 random
+# characters. "eyJ" covers both JWTs and cloudflared connector tokens, which are
+# base64 of a JSON object and so begin the same way -- that is the exact shape
+# that leaked in alert 1786313954.
+_PREFIXED = re.compile(
+    r"\b("
+    r"sk-ant-[A-Za-z0-9_\-]{20,}"
+    r"|sk-proj-[A-Za-z0-9_\-]{20,}"
+    r"|sk-[A-Za-z0-9]{32,}"
+    r"|secret-token:[A-Za-z0-9_\-]{16,}"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|glpat-[A-Za-z0-9_\-]{16,}"
+    r"|xox[baprs]-[A-Za-z0-9\-]{16,}"
+    r"|xapp-[A-Za-z0-9\-]{16,}"
+    r"|AIza[A-Za-z0-9_\-]{30,}"
+    r"|A[KS]IA[A-Z0-9]{16}"
+    r"|dop_v1_[a-f0-9]{60,}"
+    r"|shpat_[a-f0-9]{30,}"
+    r"|whsec_[A-Za-z0-9]{20,}"
+    r"|hf_[A-Za-z0-9]{30,}"
+    r"|eyJ[A-Za-z0-9_\-]{10,}"
+    r")"
+)
+
+# Generic shapes, only consulted when entropy scanning is switched on.
+_B64ISH = re.compile(r"[A-Za-z0-9+/_\-]{32,}={0,2}")
+_HEXISH = re.compile(r"\b[0-9a-fA-F]{40,}\b")
+
+# Pure hex of exactly these lengths is overwhelmingly a git object id or a
+# sha256 digest, not a credential. Redacting those makes ordinary output
+# unreadable for no security gain. This is a KNOWN HOLE, accepted knowingly: a
+# credential that happens to be exactly 40 or 64 hex characters slips past the
+# generic pass. It is documented rather than silently tuned away.
+_BENIGN_HEX_LENGTHS = frozenset({40, 64})
+
+_ENTROPY_FLOOR = 3.2
+
+
+def _shannon_bits_per_char(text):
+    """Shannon entropy in bits per character.
+
+    Prose sits near 4.0 but over a small alphabet; the discriminator that
+    actually works here is that structured identifiers (repeated separators,
+    dictionary words, long runs of one character) fall well below a random
+    string drawn from the same alphabet.
+    """
+    if not text:
+        return 0.0
+    counts = {}
+    for char in text:
+        counts[char] = counts.get(char, 0) + 1
+    total = len(text)
+    bits = 0.0
+    for count in counts.values():
+        p = count / total
+        bits -= p * math.log2(p)
+    return bits
+
+
+class HeuristicRedactor:
+    """Tier 2. Finds credential-shaped strings nobody declared.
+
+    Two independent passes:
+
+    `prefix`   vendor-branded tokens. Always on, because the false positive rate
+               is negligible and these are the highest-value things to catch.
+    `entropy`  generic long random-looking runs. OFF by default, because shape
+               alone cannot separate a 40-hex secret from a git SHA, so leaving
+               it on would redact commit ids in ordinary output. Rotation and
+               browser flows switch it on, where mangled output is a fair price
+               and an unnoticed minted token is not.
+
+    Replacements carry a truncated sha256 of the matched text. That is not
+    decoration: it lets two sides confirm they are talking about the same
+    credential -- the value stored in the vault, the one in a Nomad variable,
+    the one a live service presents -- without anyone seeing it.
+    """
+
+    def __init__(self, entropy_scan=False, entropy_floor=_ENTROPY_FLOOR):
+        self.entropy_scan = entropy_scan
+        self.entropy_floor = entropy_floor
+        self._count = 0
+
+    @property
+    def hits(self):
+        """How many substitutions were made. Unlike Tier 1, any non-zero value
+        here is worth reporting: it means something credential-shaped that the
+        broker never injected reached the boundary."""
+        return self._count
+
+    @staticmethod
+    def fingerprint(text):
+        """Short, stable identifier for a value, safe to print."""
+        digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+        return digest[:12]
+
+    def _placeholder(self, matched):
+        return "[likely-credential:sha256=%s,len=%d]" % (
+            self.fingerprint(matched),
+            len(matched),
+        )
+
+    def _looks_random(self, candidate):
+        if candidate.isdigit():
+            return False
+        is_hex = all(c in "0123456789abcdefABCDEF" for c in candidate)
+        if is_hex and len(candidate) in _BENIGN_HEX_LENGTHS:
+            return False
+        return _shannon_bits_per_char(candidate) >= self.entropy_floor
+
+    def scrub(self, text):
+        """Replace credential-shaped runs. Returns the scrubbed string."""
+        text = self._replace(text, _PREFIXED, lambda _: True)
+        if self.entropy_scan:
+            for pattern in (_HEXISH, _B64ISH):
+                text = self._replace(text, pattern, self._looks_random)
+        return text
+
+    def _replace(self, text, pattern, predicate):
+        def swap(match):
+            matched = match.group(0)
+            if not predicate(matched):
+                return matched
+            self._count += 1
+            return self._placeholder(matched)
+
+        return pattern.sub(swap, text)
