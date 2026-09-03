@@ -39,7 +39,16 @@ list_fields  item=mercury-api   -> field names on one item
 ```
 
 Values never appear in either. **Any field of any item is usable** -- there is no
-allowlist, so if `list_fields` shows it, you can reference it.
+allowlist, so if `list_fields` shows it, you can reference it. Every reference
+these return resolves; an item whose title contains a slash is addressed by its
+id, since such a title cannot be written as a reference at all.
+
+**Check `files` before concluding you have seen an item.** `list_fields` reports
+file attachments separately, and they are not fields: `copy` cannot move them and
+`run` cannot resolve them. An item can hold the thing that actually matters -- an
+upload keystore, a provisioning profile -- as an attachment, with its fields
+holding only a filename. If `files` is present, the item is not fully accounted
+for, and nobody should delete it on the strength of its fields alone.
 
 Three ways to write a reference:
 

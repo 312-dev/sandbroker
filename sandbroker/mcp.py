@@ -106,9 +106,18 @@ def tool_definitions(alias, scheme="op", default_field="credential"):
         {
             "name": "list_fields",
             "description": (
-                "List the field names on one %s item, so you can pick the right "
-                "reference. Returns labels and whether each field has a value "
-                "set, never the values themselves. Any field can be used."
+                "List what is on one %s item, so you can pick the right "
+                "reference. Returns field labels and whether each has a value "
+                "set, never the values themselves. Any field can be used.\n\n"
+                "Also lists FILE ATTACHMENTS, under \"files\". Those are not "
+                "fields: `copy` cannot move them and `run` cannot resolve them. "
+                "An item can hold its real payload in an attachment -- an "
+                "upload keystore, a provisioning profile -- so an item with a "
+                "\"files\" entry is NOT fully accounted for by its fields, and "
+                "must not be treated as migrated or deleted on that basis.\n\n"
+                "Every reference returned here resolves. An item whose title "
+                "cannot be written as a reference, because it contains a "
+                "slash, is addressed by its id instead."
                 % alias
             ),
             "inputSchema": {
@@ -537,8 +546,22 @@ class Server:
         item = args.get("item")
         if not item:
             return _tool_error("item is required")
-        return _tool_json({"vault": self.vault.alias, "item": item,
-                           "fields": self.vault.list_fields(item)})
+        described = self.vault.describe(item)
+        body = {"vault": self.vault.alias,
+                "item": described["item"],
+                "fields": described["fields"]}
+        if described["files"]:
+            body["files"] = described["files"]
+            # Said in words as well as data, because the failure this prevents
+            # is a reader concluding from a list of fields that they have seen
+            # the whole item and retiring it.
+            body["note"] = (
+                "This item also has %d file attachment(s), listed above. They "
+                "are NOT fields: `copy` cannot move them and `run` cannot "
+                "resolve them. Do not treat this item as fully migrated, or "
+                "delete it, until the attachment is dealt with by hand."
+                % len(described["files"]))
+        return _tool_json(body)
 
     def _tool_report_leak(self, args):
         where = args.get("where")

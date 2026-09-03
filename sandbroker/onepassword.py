@@ -137,6 +137,20 @@ class Vault:
                 "%s server" % (vault, self.alias, vault))
         return item, field or DEFAULT_FIELD
 
+    def _addressable(self, title, item_id):
+        """The item name to build a reference around: the title, or the id.
+
+        A reference is `op://vault/item/field` split on slashes, so a title that
+        contains one cannot be expressed: `op://Production/play/scrolly/X/notes`
+        parses as the item "play". Discovery that handed back such a reference
+        would be promising something resolution rejects, which is the bug this
+        avoids rather than a puzzle for the caller. The id is not a secret and
+        addresses the item exactly, so it stands in whenever the title cannot.
+        """
+        if title and "/" not in title:
+            return title
+        return item_id or title
+
     def read(self, ref):
         """Resolve one ref to its value. ANY field of any item is allowed: there
         is no per-field allowlist, because a vault the agent may use is a vault
@@ -325,15 +339,15 @@ class Vault:
             title = str(entry.get("title") or "")
             if not title:
                 continue
-            item = {
-                "title": title,
-                "ref": "op://%s/%s" % (self.alias, title),
-                "category": str(entry.get("category") or ""),
-            }
             # The UUID is not a secret, and it is the unambiguous way to address
             # an item whose title contains characters that make a reference
             # awkward. Worth carrying so a caller always has a way through.
             iid = str(entry.get("id") or "")
+            item = {
+                "title": title,
+                "ref": "op://%s/%s" % (self.alias, self._addressable(title, iid)),
+                "category": str(entry.get("category") or ""),
+            }
             if iid:
                 item["id"] = iid
             items.append(item)
@@ -346,25 +360,61 @@ class Vault:
         agent can see that an item carries `username`, `credential` and
         `account_id` without any of them crossing the boundary.
         """
+        return self.describe(item)["fields"]
+
+    def describe(self, item):
+        """Everything addressable on one item: its fields AND its attachments.
+
+        One fetch, because the two used to be separate calls for the same JSON
+        and the answer has to be consistent between them.
+        """
         out = self._run([self.op_bin, "item", "get", item,
                          "--vault", self.real_name, "--format", "json"])
         try:
             data = json.loads(out)
         except ValueError:
             raise VaultError("could not parse the item")
+        if not isinstance(data, dict):
+            raise VaultError("could not parse the item")
+
+        # Address the reference by whatever actually resolves. `op item get`
+        # accepts a title containing a slash, so this path succeeds for items
+        # whose reference cannot be written -- which is precisely when handing
+        # back a title-based reference would mislead.
+        name = self._addressable(str(data.get("title") or ""),
+                                 str(data.get("id") or "")) or item
+
         fields = []
         seen = set()
-        for field in (data.get("fields") or []) if isinstance(data, dict) else []:
+        for field in data.get("fields") or []:
             label = str(field.get("label") or field.get("id") or "")
             if not label or label in seen:
                 continue
             seen.add(label)
             fields.append({
                 "field": label,
-                "ref": "op://%s/%s/%s" % (self.alias, item, label),
+                "ref": "op://%s/%s/%s" % (self.alias, name, label),
                 "type": str(field.get("type") or ""),
                 # Whether a value EXISTS, never what it is. Empty fields are
                 # common in 1Password templates and are worth skipping.
                 "populated": bool(field.get("value")),
             })
-        return fields
+
+        # An item's fields are not all of it. A Play upload keystore or a
+        # provisioning profile lives as an attached FILE, which carries no field
+        # and so appeared nowhere here -- an item could be read as fully
+        # accounted for while the thing that mattered most was invisible. That
+        # is how a migration deletes an original it never actually copied.
+        # Names and sizes only; contents never cross this boundary.
+        files = []
+        for entry in data.get("files") or []:
+            fname = str(entry.get("name") or "")
+            if not fname:
+                continue
+            files.append({
+                "name": fname,
+                "id": str(entry.get("id") or ""),
+                "size": entry.get("size"),
+            })
+
+        return {"item": name, "fields": fields, "files": files}

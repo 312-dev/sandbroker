@@ -28,13 +28,24 @@ One daemon per vault. Five tools. No approvals, no login, no web UI.
 |---|---|
 | `run` | Execute a command with secrets in its environment, return scrubbed output |
 | `list_items` | Item titles and references in this vault, never values |
-| `list_fields` | Field names on one item, so any field can be addressed |
+| `list_fields` | Field names and file attachments on one item, so any field can be addressed |
 | `store` | Mint or capture a NEW credential into the vault, returning only a fingerprint |
 | `copy` | Duplicate one field's value onto another field in the same vault, unseen |
 | `report_leak` | Raise a sticky alarm when a live credential is seen in output |
 
 Any field of any item in the vault is usable. There is no per-field allowlist and
 no capability grant: a vault the agent may reach is a vault the agent may use.
+
+Discovery never hands back a reference that will not resolve. An item whose title
+contains a slash cannot be written as `op://vault/item/field` at all, so those are
+addressed by their id instead; the title is still reported alongside.
+
+`list_fields` also reports **file attachments**, which are not fields and cannot
+be read or copied by the broker. That matters more than it sounds: an item can
+keep its real payload in an attachment -- an upload keystore, a provisioning
+profile -- and listing only its fields makes such an item look fully accounted
+for. Anything reorganising a vault must treat an item with attachments as
+unfinished business.
 
 ## Writing: `store`
 
