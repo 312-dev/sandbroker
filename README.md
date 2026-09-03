@@ -30,6 +30,7 @@ One daemon per vault. Five tools. No approvals, no login, no web UI.
 | `list_items` | Item titles and references in this vault, never values |
 | `list_fields` | Field names on one item, so any field can be addressed |
 | `store` | Mint or capture a NEW credential into the vault, returning only a fingerprint |
+| `copy` | Duplicate one field's value onto another field in the same vault, unseen |
 | `report_leak` | Raise a sticky alarm when a live credential is seen in output |
 
 Any field of any item in the vault is usable. There is no per-field allowlist and
@@ -68,6 +69,42 @@ a new field and retire the old one by hand.
 account needs write scope of its own. Writing is a strictly larger power than
 reading and does not come along with it. A `require_unlock` vault still needs its
 unlock at the moment of use, so Production takes both.
+
+## Reorganising: `copy`
+
+A vault accumulates sprawl -- one credential per item, titles that made sense
+once, an app's secrets spread across a dozen entries. Tidying that up should not
+require regenerating anything, and it should not require anyone to read a value
+in order to move it.
+
+```
+copy  src: "op://Production/Scrolly Resend API Key/password"
+      dst: "op://Production/scrolly/RESEND_API_KEY"
+-> {"copied": true, "fingerprint": "4b2c9a1f7e3d", "length": 33, "concealed": true}
+```
+
+The value moves inside the broker: it never enters a command's environment,
+never reaches a shell, and is never returned. That is why this is its own
+operation rather than a `store` mint command. A mint command's stdout passes the
+redactor, which replaces an injected secret with a marker, so `printf %s "$SRC"`
+cannot work -- and encoding the value to slip past the exact-match scan would be
+a way of writing a credential the broker believes it has not written.
+
+Because nothing is stripped on this path, the copy is byte-exact. `store` trims
+its mint command's stdout, which is right for a token on a line of its own and
+wrong for a PEM block, where the trailing newline is part of the key.
+
+**Same vault only.** A reference to another vault is refused, and that is
+structural: one server serves one vault, so both refs are parsed by the same
+object. A copy that crossed vaults could stage a Production secret somewhere
+with different readers, which is an escalation. Within one vault it grants no
+read access the vault did not already grant, since whoever can read the
+destination could already read the source.
+
+Create-or-add still applies, so a copy can add a field but never replace one.
+Verify before retiring the original: fingerprint the source through `run` with
+`printf %s "$V" | sha256sum | cut -c1-12` and compare it to the one `copy`
+returned. Deleting the original stays a human action.
 
 Nothing is stored if the mint command exits non-zero, if its output was long
 enough to be truncated, or if the value carries a redaction marker. A prefix of a

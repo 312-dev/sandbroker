@@ -204,7 +204,7 @@ class Vault:
             raise VaultError("could not parse the item")
         return data if isinstance(data, dict) else None
 
-    def write(self, ref, value):
+    def write(self, ref, value, concealed=True):
         """Store a NEW value at ref and return its fingerprint, never the value.
 
         CREATE OR ADD ONLY. If the field already holds a value this refuses,
@@ -216,13 +216,19 @@ class Vault:
         The value travels on stdin as a JSON template, never as an assignment
         argument, so it is never present in the process table. op's own help
         recommends exactly this for sensitive values.
+
+        `concealed` is False only for a copy carrying a field that was already
+        plain, such as an account id or an endpoint sitting alongside the key it
+        belongs to. A minted secret has no such provenance and stays concealed.
         """
         item, field = self.parse_ref(ref)
         if not value:
             raise VaultError("refusing to store an empty value")
 
         existing = self._item_json(item)
-        new_field = {"label": field, "type": "CONCEALED", "value": value}
+        new_field = {"label": field,
+                     "type": "CONCEALED" if concealed else "STRING",
+                     "value": value}
 
         if existing is None:
             template = {"title": item,
@@ -244,6 +250,64 @@ class Vault:
         self._run(argv, stdin_data=json.dumps(template).encode("utf-8"),
                   timeout=30)
         return fingerprint(value)
+
+    def copy(self, src_ref, dst_ref):
+        """Duplicate one field's value onto another field, within this vault.
+
+        Returns (fingerprint, length, concealed). The value moves entirely
+        inside the daemon: it never enters a child's environment, never reaches
+        a shell, and is never returned. That is why this is its own operation
+        rather than a `store` mint command. A mint command's stdout passes the
+        redactor, which by design replaces an injected secret with a marker, so
+        a copy expressed that way cannot work -- and the obvious way around it,
+        encoding the value so the exact-match scan misses it, is a way of
+        writing a credential the broker believes it has not written.
+
+        SAME VAULT ONLY, and that is structural rather than a rule this method
+        remembers to apply: parse_ref rejects a reference for any other vault,
+        and one server serves exactly one vault. The distinction matters. A copy
+        that crossed vaults could stage a Production secret somewhere less
+        guarded, which is an escalation. A copy inside one vault grants no read
+        access that vault did not already grant, because whoever can read the
+        destination could already read the source.
+
+        Create-or-add still applies to the destination, so this can add a field
+        but can never replace one. Retiring the original stays a human action.
+        """
+        src_item, src_field = self.parse_ref(src_ref)
+        dst_item, dst_field = self.parse_ref(dst_ref)
+        if (src_item, src_field) == (dst_item, dst_field):
+            raise VaultError("source and destination are the same field")
+
+        value, concealed = self._field_with_type(src_item, src_field)
+        # No strip, no normalisation. A trailing newline is part of a PEM block
+        # and dropping it silently produces a key that looks right and fails to
+        # parse, which is the one outcome a migration cannot survive.
+        fp = self.write(dst_ref, value, concealed=concealed)
+        return fp, len(value), concealed
+
+    def _field_with_type(self, item, field):
+        """One field's value and whether it was concealed, for a faithful copy.
+
+        Goes through the item rather than `op read` because the type is only
+        visible on the item, and a copy that lost it would either conceal an
+        account id or expose a key.
+        """
+        data = self._item_json(item)
+        if data is None:
+            raise VaultError("this vault has no item %r" % item)
+        for entry in data.get("fields") or []:
+            if entry.get("value") is None:
+                continue
+            if field in (entry.get("label"), entry.get("id")):
+                # Only the concealed/plain distinction is carried. op has richer
+                # types (URL, EMAIL, OTP) that carry behaviour in the UI, and
+                # asserting one of those on a field copied into a different item
+                # claims more than this operation knows.
+                return entry["value"], entry.get("type") == "CONCEALED"
+        raise VaultError(
+            "item %r has no field %r with a value set (list_fields shows what "
+            "it does have)" % (item, field))
 
     # -- discovery (metadata only, structurally value-free) -----------------
 

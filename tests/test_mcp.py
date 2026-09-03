@@ -96,11 +96,12 @@ class TestProtocol(unittest.TestCase):
         self.assertIsNone(self.server.handle(
             {"jsonrpc": "2.0", "method": "notifications/initialized"}))
 
-    def test_tools_list_has_exactly_the_five_tools(self):
+    def test_tools_list_has_exactly_the_six_tools(self):
         result = self.server.handle({"jsonrpc": "2.0", "id": 1,
                                      "method": "tools/list"})
         names = sorted(t["name"] for t in result["result"]["tools"])
-        self.assertEqual(["list_fields", "list_items", "report_leak", "run", "store"], names)
+        self.assertEqual(["copy", "list_fields", "list_items", "report_leak",
+                          "run", "store"], names)
 
     def test_unknown_method_is_an_error(self):
         result = self.server.handle({"jsonrpc": "2.0", "id": 1, "method": "nope"})

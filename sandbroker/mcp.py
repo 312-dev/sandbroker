@@ -123,6 +123,46 @@ def tool_definitions(alias, scheme="op", default_field="credential"):
             },
         },
         {
+            "name": "copy",
+            "description": (
+                "Duplicate one field's value onto another field in the %s "
+                "vault, without seeing it. Use this to reorganise credentials: "
+                "consolidating scattered items, giving a field a clearer name, "
+                "gathering one app's secrets onto one item.\n\n"
+                "  src: op://%s/Old Item/password\n"
+                "  dst: op://%s/myapp/API_KEY\n\n"
+                "The value moves inside the broker. It never enters a command, "
+                "so unlike `store` there is nothing for the redactor to strip "
+                "and the copy is byte-exact -- no trailing newline is trimmed, "
+                "which matters for a PEM key. You get back a fingerprint and a "
+                "length; compare the fingerprint against the source (run "
+                "`printf %%s \"$V\" | sha256sum | cut -c1-12` through `run`) to "
+                "prove the copy is identical before a human deletes the "
+                "original.\n\n"
+                "Same vault only: a reference to another vault is refused. "
+                "Create-or-add still applies, so this can add a field but never "
+                "replace one, and deleting the original stays a human action."
+                % (alias, alias, alias)
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "src": {
+                        "type": "string",
+                        "description": "Field to copy from, e.g. "
+                                       "\"%s/Old Item/password\"." % qualified,
+                    },
+                    "dst": {
+                        "type": "string",
+                        "description": "Field to copy to, e.g. "
+                                       "\"%s/myapp/API_KEY\". Must not already "
+                                       "hold a value." % qualified,
+                    },
+                },
+                "required": ["src", "dst"],
+            },
+        },
+        {
             "name": "store",
             "description": (
                 "Put a NEW credential into the %s vault without ever seeing it. "
@@ -320,6 +360,7 @@ class Server:
             "list_items": self._tool_list_items,
             "list_fields": self._tool_list_fields,
             "store": self._tool_store,
+            "copy": self._tool_copy,
             "report_leak": self._tool_report_leak,
         }
         handler = handlers.get(name)
@@ -452,6 +493,41 @@ class Server:
                            "source": source,
                            "fingerprint": fp,
                            "length": len(value)})
+
+    def _tool_copy(self, args):
+        # The same two gates as store, for the same reasons: this writes, and a
+        # write into a locked vault is what the lock is for. It also reads, so
+        # skipping the lock here would open a resolution path that `run` gates.
+        if not self.config.store_enabled(self.vault.alias):
+            return _tool_error(
+                "writing to %s is not enabled. copy shares store's permission "
+                "because it is a write: a human sets \"store_enabled\": true "
+                "for it in sandbroker.json and gives that vault's service "
+                "account write scope." % self.vault.alias)
+
+        unlocked, _ = locks.status(self.config, self.vault.alias)
+        if not unlocked:
+            return _tool_error(
+                "%s is LOCKED. Nothing will be copied until a human unlocks it "
+                "on the host:\n    sudo sandbroker unlock %s --minutes 30"
+                % (self.vault.alias, self.vault.alias))
+
+        src, dst = args.get("src"), args.get("dst")
+        if not src:
+            return _tool_error("src is required")
+        if not dst:
+            return _tool_error("dst is required")
+
+        fp, length, concealed = self.vault.copy(src, dst)
+        self.log("copy vault=%s src=%s dst=%s fingerprint=%s len=%d"
+                 % (self.vault.alias, src, dst, fp, length))
+        return _tool_json({"copied": True,
+                           "vault": self.vault.alias,
+                           "src": src,
+                           "dst": dst,
+                           "fingerprint": fp,
+                           "length": length,
+                           "concealed": concealed})
 
     def _tool_list_items(self, _args):
         return _tool_json({"vault": self.vault.alias,

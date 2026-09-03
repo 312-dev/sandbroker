@@ -8,7 +8,7 @@ description: Use a credential, API token, database password, or other secret wit
 You run commands that need credentials. You never see the credentials.
 
 There is one MCP server per vault (`sandbroker-dev`, `sandbroker-production`,
-...). Each exposes five tools. Pick the server for the vault you need; the vault
+...). Each exposes six tools. Pick the server for the vault you need; the vault
 is implied by which server you call.
 
 ## The whole pattern
@@ -103,6 +103,33 @@ old one to a human, so one bad call can never destroy a working credential.
 identically everywhere, so comparing the fingerprint from `store` against one
 computed over a Nomad variable and over what the live service presents proves the
 rotation took, with nobody reading the secret.
+
+## Moving a credential you must not see: `copy`
+
+Reorganising a vault -- consolidating an app's scattered items, renaming a field
+to something meaningful -- needs values to move, and neither reading them nor
+regenerating them is acceptable. `copy` moves one field onto another **within the
+same vault**, inside the broker:
+
+```
+copy  src="op://Production/Scrolly Resend API Key/password"
+      dst="op://Production/scrolly/RESEND_API_KEY"
+-> {"copied": true, "fingerprint": "4b2c9a1f7e3d", "length": 33}
+```
+
+Do not try to express this as a `store` mint command. `printf %s "$SRC"` is
+refused, because the redactor replaces an injected secret in stdout with a
+marker and the broker will not write a placeholder into a vault. Encoding the
+value to get past that check is not a workaround to reach for: it writes a
+credential the broker believes it has not written. `copy` is the supported path.
+
+A copy is byte-exact, including a trailing newline that `store` would strip, so
+a PEM block survives it intact.
+
+**Same vault only**, and create-or-add still applies. Before anyone deletes an
+original, prove the copy took: fingerprint the source with `run`, using
+`printf %s "$V" | sha256sum | cut -c1-12`, and compare it to what `copy`
+returned. Equal fingerprints mean the values are identical and nobody saw either.
 
 ## If a real credential ever appears in output: report it immediately
 

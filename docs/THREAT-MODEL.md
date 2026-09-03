@@ -99,6 +99,34 @@ Two additions, neither of which touches Tier 1:
   40 or 64 characters are exempt even when it is on, which is a documented hole
   rather than a silent tuning.
 
+### `copy`, and what it does not widen
+
+Reorganising a vault needs values to move between fields, and the two ways to do
+that without `copy` are both worse. Reading each value puts it in the context
+forever. Expressing the move as a `store` mint command does not work, because
+Tier 1 replaces an injected secret in stdout with a marker and the broker
+refuses to write a placeholder -- but the way around that check is to encode the
+value so the exact-match scan misses it, which writes a credential the broker
+believes it has not written. That gap is a property of `store`'s design and
+predates this tool; `copy` exists partly so nobody has a reason to reach for it.
+
+`copy` grants no read capability. The value moves inside the daemon, is never
+placed in a child's environment and is never returned; the caller gets a
+fingerprint and a length, the same as `store`.
+
+The confinement that matters is **same vault only**, and it is structural rather
+than a check: one server serves one vault, and both references are parsed by
+that vault's own `parse_ref`, which rejects any other. A cross-vault copy would
+be an escalation, since it could stage a Production secret into a vault with
+different readers, and no amount of care in the caller would make that safe. A
+copy inside one vault moves a value between two places that already share
+exactly one audience, so it grants nothing that was not already granted.
+
+Create-or-add still applies to the destination, so `copy` can add a field and
+can never replace one. The residual risk is clutter and a second live location
+for a credential until a human deletes the first, which is the same shape as the
+residual risk `store` already carries for a rotation.
+
 `report_leak` remains the mitigation of record. Agents are instructed to raise
 it on sight, before finishing the task, including on a Tier 2 hit: a heuristic
 catch is evidence a live credential reached the boundary, not proof it was
