@@ -300,6 +300,92 @@ class Vault:
         fp = self.write(dst_ref, value, concealed=concealed)
         return fp, len(value), concealed
 
+    def _populated_values(self, data):
+        """Every field on an item that actually holds something, as label -> value.
+
+        Stays inside the daemon. It exists so archive() can compare two items by
+        value without either one crossing the boundary.
+        """
+        out = {}
+        for entry in data.get("fields") or []:
+            label = str(entry.get("label") or entry.get("id") or "")
+            value = entry.get("value")
+            if label and value:
+                out[label] = str(value)
+        return out
+
+    def archive(self, ref, superseded_by_ref):
+        """Archive an item, but only after proving every value it holds survives.
+
+        Archiving is reversible where deleting is not, which is the only reason
+        this exists at all: an item in the Archive can be restored from the
+        1Password apps, so the worst case is an outage rather than a loss. That
+        is a different class of mistake from the one `write` refuses to make.
+
+        Reversible is still not free, so the real protection is that this cannot
+        retire anything it has not first shown to be redundant. Every populated
+        field on the item must have a fingerprint-identical counterpart on the
+        item said to supersede it. One unmatched value and the whole call is
+        refused, named field by field. The agent proposing the archive is not
+        trusted to have done the copy correctly; the broker checks.
+
+        An item carrying a file attachment is refused outright. `copy` cannot
+        move an attachment, so its survival cannot be demonstrated, and an
+        unprovable claim is exactly what this is here to reject.
+
+        Same vault only, for the same structural reason as copy: one server,
+        one vault, both references parsed by it.
+        """
+        item, _ = self.parse_ref(ref)
+        keeper, _ = self.parse_ref(superseded_by_ref)
+
+        src = self._item_json(item)
+        if src is None:
+            raise VaultError("this vault has no item %r" % item)
+        dst = self._item_json(keeper)
+        if dst is None:
+            raise VaultError("this vault has no item %r" % keeper)
+        if src.get("id") and src.get("id") == dst.get("id"):
+            raise VaultError("an item cannot supersede itself")
+
+        if src.get("files"):
+            raise VaultError(
+                "item %r carries %d file attachment(s), which cannot be copied "
+                "and so cannot be shown to exist anywhere else. Archiving it "
+                "would retire the only copy. Move the attachment by hand first."
+                % (item, len(src["files"])))
+
+        mine = self._populated_values(src)
+        if not mine:
+            raise VaultError(
+                "item %r has no populated field, so there is nothing to prove "
+                "was preserved and nothing this check could vouch for" % item)
+
+        # Fingerprint rather than compare values directly, so the comparison is
+        # the same one a human can reproduce and audit afterwards.
+        elsewhere = {}
+        for label, value in self._populated_values(dst).items():
+            elsewhere.setdefault(fingerprint(value), label)
+
+        matched, missing = [], []
+        for label in sorted(mine):
+            fp = fingerprint(mine[label])
+            if fp in elsewhere:
+                matched.append({"field": label, "fingerprint": fp,
+                                "found_as": elsewhere[fp]})
+            else:
+                missing.append(label)
+
+        if missing:
+            raise VaultError(
+                "refusing to archive %r: %d of its %d values are not present on "
+                "%r (%s). Copy them across first, then retry."
+                % (item, len(missing), len(mine), keeper, ", ".join(missing)))
+
+        self._run([self.op_bin, "item", "delete", src.get("id") or item,
+                   "--vault", self.real_name, "--archive"], timeout=30)
+        return matched
+
     def _field_with_type(self, item, field):
         """One field's value and whether it was concealed, for a faithful copy.
 

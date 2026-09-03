@@ -8,7 +8,7 @@ description: Use a credential, API token, database password, or other secret wit
 You run commands that need credentials. You never see the credentials.
 
 There is one MCP server per vault (`sandbroker-dev`, `sandbroker-production`,
-...). Each exposes six tools. Pick the server for the vault you need; the vault
+...). Each exposes seven tools. Pick the server for the vault you need; the vault
 is implied by which server you call.
 
 ## The whole pattern
@@ -139,6 +139,28 @@ a PEM block survives it intact.
 original, prove the copy took: fingerprint the source with `run`, using
 `printf %s "$V" | sha256sum | cut -c1-12`, and compare it to what `copy`
 returned. Equal fingerprints mean the values are identical and nobody saw either.
+
+## Retiring an item you have replaced: `archive`
+
+After consolidating, the old items are clutter, and clutter in a credential store
+is a hazard of its own: nobody can tell which of two copies is live.
+
+```
+archive  item="Scrolly Resend API Key"  superseded_by="scrolly"
+-> {"archived": true, "verified": [
+     {"field": "password", "found_as": "RESEND_API_KEY"}, ...]}
+```
+
+**Archived, not deleted** -- it goes to the 1Password Archive and a human can
+restore it. That is why this is allowed at all.
+
+**The broker checks your work.** Every populated field on the item must have a
+fingerprint-identical twin on the item you name in `superseded_by`, or the call
+is refused and the unmatched fields are listed. If you get that refusal, you
+missed a field: copy it and retry. Do not look for a way around the check.
+
+**An item with a `files` entry is always refused**, because an attachment cannot
+be copied and so cannot be shown to survive. That one stays a human job.
 
 ## If a real credential ever appears in output: report it immediately
 

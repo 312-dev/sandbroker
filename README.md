@@ -31,6 +31,7 @@ One daemon per vault. Five tools. No approvals, no login, no web UI.
 | `list_fields` | Field names and file attachments on one item, so any field can be addressed |
 | `store` | Mint or capture a NEW credential into the vault, returning only a fingerprint |
 | `copy` | Duplicate one field's value onto another field in the same vault, unseen |
+| `archive` | Retire an item, but only once every value on it is proven to live elsewhere |
 | `report_leak` | Raise a sticky alarm when a live credential is seen in output |
 
 Any field of any item in the vault is usable. There is no per-field allowlist and
@@ -115,7 +116,38 @@ destination could already read the source.
 Create-or-add still applies, so a copy can add a field but never replace one.
 Verify before retiring the original: fingerprint the source through `run` with
 `printf %s "$V" | sha256sum | cut -c1-12` and compare it to the one `copy`
-returned. Deleting the original stays a human action.
+returned.
+
+## Retiring: `archive`
+
+Once the values live somewhere better, the old item is clutter -- and clutter in
+a credential store is its own hazard, because the next person cannot tell which
+of two copies is live.
+
+```
+archive  item: "Scrolly Resend API Key"
+         superseded_by: "scrolly"
+-> {"archived": true, "verified": [
+     {"field": "password", "fingerprint": "9bcff1a7e888", "found_as": "RESEND_API_KEY"},
+     {"field": "username", "fingerprint": "b4b68cb4966c", "found_as": "RESEND_ACCOUNT"}]}
+```
+
+**Archived, not deleted.** The item moves to the 1Password Archive and can be
+restored from the apps. That reversibility is the only reason the broker will do
+this at all: `write` refuses to overwrite because a bad call there is
+unrecoverable, and the same reasoning would forbid a real delete.
+
+**It does not take the caller's word for it.** Every populated field on the item
+must have a fingerprint-identical counterpart on the item named as superseding
+it. One unmatched value and the entire call is refused, with the unmatched
+fields named. An agent that copied fifteen of sixteen fields and asked to retire
+the original gets told which one it missed, rather than being believed.
+
+**An item with a file attachment is always refused.** `copy` cannot move an
+attachment, so nothing can demonstrate the attachment survives elsewhere, and an
+unprovable claim is precisely what this refuses. Move the file by hand first.
+
+Same vault only, and the item may not supersede itself.
 
 Nothing is stored if the mint command exits non-zero, if its output was long
 enough to be truncated, or if the value carries a redaction marker. A prefix of a

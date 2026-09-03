@@ -172,6 +172,42 @@ def tool_definitions(alias, scheme="op", default_field="credential"):
             },
         },
         {
+            "name": "archive",
+            "description": (
+                "Retire an item from the %s vault once its values live "
+                "elsewhere. Archived, NOT deleted: the item moves to the "
+                "1Password Archive and a human can restore it.\n\n"
+                "  item: \"Scrolly Resend API Key\"\n"
+                "  superseded_by: \"scrolly\"\n\n"
+                "This will not take your word for it. Every populated field on "
+                "the item must have a fingerprint-identical counterpart on the "
+                "item you name as superseding it, or the whole call is refused "
+                "and the unmatched fields are named. Copy first, archive after; "
+                "the refusal is the feature.\n\n"
+                "An item holding a file attachment is always refused, because "
+                "an attachment cannot be copied and so cannot be shown to exist "
+                "anywhere else. Same vault only." % alias
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "type": "string",
+                        "description": "The item to archive, by title or id "
+                                       "(e.g. \"%s/Old Item\" or just "
+                                       "\"Old Item\")." % qualified,
+                    },
+                    "superseded_by": {
+                        "type": "string",
+                        "description": "The item that now holds these values. "
+                                       "Every populated field on `item` must be "
+                                       "found here or nothing is archived.",
+                    },
+                },
+                "required": ["item", "superseded_by"],
+            },
+        },
+        {
             "name": "store",
             "description": (
                 "Put a NEW credential into the %s vault without ever seeing it. "
@@ -370,6 +406,7 @@ class Server:
             "list_fields": self._tool_list_fields,
             "store": self._tool_store,
             "copy": self._tool_copy,
+            "archive": self._tool_archive,
             "report_leak": self._tool_report_leak,
         }
         handler = handlers.get(name)
@@ -541,6 +578,45 @@ class Server:
     def _tool_list_items(self, _args):
         return _tool_json({"vault": self.vault.alias,
                            "items": self.vault.list_items()})
+
+    def _tool_archive(self, args):
+        # Same two gates as store and copy. This is the only tool that takes
+        # something away, so the standing opt-in matters more here, not less.
+        if not self.config.store_enabled(self.vault.alias):
+            return _tool_error(
+                "writing to %s is not enabled, and archive is a write. A human "
+                "sets \"store_enabled\": true for it in sandbroker.json and "
+                "gives that vault's service account write scope."
+                % self.vault.alias)
+
+        unlocked, _ = locks.status(self.config, self.vault.alias)
+        if not unlocked:
+            return _tool_error(
+                "%s is LOCKED. Nothing will be archived until a human unlocks "
+                "it on the host:\n    sudo sandbroker unlock %s --minutes 30"
+                % (self.vault.alias, self.vault.alias))
+
+        item = args.get("item")
+        superseded_by = args.get("superseded_by")
+        if not item:
+            return _tool_error("item is required")
+        if not superseded_by:
+            return _tool_error(
+                "superseded_by is required: archive will not retire an item "
+                "without being shown where its values now live")
+
+        matched = self.vault.archive(item, superseded_by)
+        self.log("archive vault=%s item=%s superseded_by=%s fields=%d"
+                 % (self.vault.alias, item, superseded_by, len(matched)))
+        return _tool_json({
+            "archived": True,
+            "vault": self.vault.alias,
+            "item": item,
+            "superseded_by": superseded_by,
+            "verified": matched,
+            "note": "Archived, not deleted. Restore it from the Archive in the "
+                    "1Password apps if this was wrong.",
+        })
 
     def _tool_list_fields(self, args):
         item = args.get("item")

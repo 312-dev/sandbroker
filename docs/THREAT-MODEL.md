@@ -124,8 +124,39 @@ exactly one audience, so it grants nothing that was not already granted.
 
 Create-or-add still applies to the destination, so `copy` can add a field and
 can never replace one. The residual risk is clutter and a second live location
-for a credential until a human deletes the first, which is the same shape as the
-residual risk `store` already carries for a rotation.
+for a credential until a human retires the first.
+
+### `archive`, the only tool that takes something away
+
+That residual clutter is not benign. Two live copies of a credential with no
+indication which is current is how the wrong one gets rotated, so leaving every
+retirement to a human hand is not the safe default it looks like.
+
+`archive` is allowed because **it is reversible**. `op item delete --archive`
+moves the item to the 1Password Archive, where a human restores it from the apps.
+The reason `write` refuses to overwrite is that an overwrite is unrecoverable and
+one bad call could empty a vault; an archive of every item in a vault is an
+outage, which is bad, but it is a Tuesday rather than a catastrophe. A real
+delete would not clear that bar and is not offered.
+
+Reversible is not the same as free, so the substantive control is that the broker
+**will not retire what it has not itself proven redundant.** Every populated field
+on the item must fingerprint-match a field on the item named as superseding it, or
+the call is refused with the unmatched fields named. The agent requesting the
+archive is not trusted to have copied correctly, which matters because the
+plausible failure is not a malicious agent but a confused one: fifteen of sixteen
+fields copied, the sixteenth silently missed, and a request to tidy up.
+
+An item carrying a **file attachment is refused unconditionally**, ahead of any
+field comparison. `copy` cannot move an attachment, so nothing can show it
+survives, and this tool exists to reject exactly that kind of unprovable claim.
+An item whose fields all match but which carries an attachment is the trap this
+ordering is for: field verification would pass and let it through.
+
+Residual risk: an agent that copies an item and then archives the original has
+reorganised the vault without losing anything, which is the intended use. An
+agent doing that to everything causes an availability incident that a human
+undoes from the Archive. Nothing here can destroy a value.
 
 `report_leak` remains the mitigation of record. Agents are instructed to raise
 it on sight, before finishing the task, including on a Tier 2 hit: a heuristic

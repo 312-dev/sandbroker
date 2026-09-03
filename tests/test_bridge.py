@@ -88,8 +88,8 @@ class TestQueueRoundTrip(unittest.TestCase):
         reply = self.harness.send({"jsonrpc": "2.0", "id": 1,
                                    "method": "tools/list"})
         names = sorted(t["name"] for t in reply["result"]["tools"])
-        self.assertEqual(["copy", "list_fields", "list_items", "report_leak",
-                          "run", "store"], names)
+        self.assertEqual(["archive", "copy", "list_fields", "list_items",
+                          "report_leak", "run", "store"], names)
 
     def test_run_is_redacted_through_the_queue(self):
         """The redaction guarantee must hold on this path too, not just on the
