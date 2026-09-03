@@ -22,7 +22,7 @@ prompt, a log, a commit, or a request to the model API.
 
 ## What it is
 
-One daemon per vault. Four tools. No approvals, no login, no web UI.
+One daemon per vault. Five tools. No approvals, no login, no web UI.
 
 | Tool | What it does |
 |---|---|
@@ -34,6 +34,45 @@ One daemon per vault. Four tools. No approvals, no login, no web UI.
 
 Any field of any item in the vault is usable. There is no per-field allowlist and
 no capability grant: a vault the agent may reach is a vault the agent may use.
+
+## Writing: `store`
+
+Reading a credential to save it somewhere puts it in the transcript forever,
+which defeats the point of the broker. `store` is the write half, and the agent
+never handles the value:
+
+```
+store  ref: "op://Dev/cloudflare-tunnel/rotated_2026_09"
+       source: "command"
+       command: 'curl -sS -X POST -H "Authorization: Bearer $CF_KEY" https://api.../tokens | jq -r .result.value'
+       secrets: {"CF_KEY": "op://Dev/cloudflare/credential"}
+-> {"stored": true, "fingerprint": "9f3a2b1c8d7e", "length": 40}
+```
+
+The broker runs the mint command, takes stdout, writes it to the vault and
+returns a fingerprint. **That stdout is never returned to the caller.** Use
+`source: "generate"` instead and the broker makes the random bytes itself, for a
+secret only you define.
+
+The fingerprint is a truncated SHA-256, and it is what makes a rotation
+verifiable without disclosure: the same value fingerprints identically in the
+vault, in a Nomad variable and in whatever a live service presents, so all three
+can be confirmed identical without any of them being shown.
+
+**Create or add only.** Storing onto a field that already holds a value is
+refused. A broker that can overwrite is one bad call away from destroying every
+credential in the vault, so superseding a value stays a human action: rotate into
+a new field and retire the old one by hand.
+
+**Opt in per vault**, with `"store_enabled": true`, and the vault's service
+account needs write scope of its own. Writing is a strictly larger power than
+reading and does not come along with it. A `require_unlock` vault still needs its
+unlock at the moment of use, so Production takes both.
+
+Nothing is stored if the mint command exits non-zero, if its output was long
+enough to be truncated, or if the value carries a redaction marker. A prefix of a
+credential, or a placeholder written in place of one, would fail later against a
+value nobody can read back.
 
 ## The one guarantee
 
