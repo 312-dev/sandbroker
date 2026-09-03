@@ -7,6 +7,7 @@ place to keep the dependency count at zero.
 """
 
 import json
+import re
 import traceback
 from secrets import token_urlsafe
 
@@ -16,6 +17,10 @@ from .onepassword import VaultError
 from .runner import RunError
 
 PROTOCOL_VERSION = "2025-06-18"
+
+# Both scrubbers' output shapes. Used to prove a value on its way INTO the
+# vault is a credential rather than something a scrubber already replaced.
+_REDACTION_MARKER = re.compile(r"\[(?:redacted:|likely-credential:)")
 
 # JSON-RPC error codes
 PARSE_ERROR = -32700
@@ -349,8 +354,9 @@ class Server:
             cwd=args.get("cwd"),
             stdin=args.get("stdin"),
         )
-        self.log("run vault=%s exit=%s redactions=%d"
-                 % (self.vault.alias, result["exit_code"], result["redactions"]))
+        self.log("run vault=%s exit=%s redactions=%d heuristic=%d"
+                 % (self.vault.alias, result["exit_code"], result["redactions"],
+                    result.get("heuristic_hits", 0)))
         return _tool_json(result)
 
     def _tool_store(self, args):
@@ -393,6 +399,11 @@ class Server:
                 command=command,
                 secrets=args.get("secrets"),
                 timeout=args.get("timeout"),
+                # The whole point of store is that this output is consumed here
+                # and never returned, so Tier 2 has nothing to protect and would
+                # do real harm: a minted token is exactly what it matches, and
+                # scrubbing it would write the placeholder into the vault.
+                heuristic=False,
             )
             # Refuse on a failed mint rather than storing whatever partial
             # output landed on stdout. A half-written credential stored as if it
@@ -403,12 +414,34 @@ class Server:
                     "mint command exited %s, so nothing was stored. Its output "
                     "is not returned; re-run it through `run` if you need to see "
                     "why it failed." % result["exit_code"])
+            # Output long enough to be capped means the value on the way in is
+            # not the value that was minted. Storing a prefix of a credential is
+            # the same failure as storing a half-written one, and the check
+            # above already established that is worse than an error.
+            if result.get("truncated"):
+                return _tool_error(
+                    "the mint command produced more than max_output_bytes, so "
+                    "its stdout was capped and would store a truncated value. "
+                    "Nothing was stored. Narrow the command's output (pipe it "
+                    "through jq or head) so it emits only the credential.")
             value = (result.get("stdout") or "").strip()
         else:
             return _tool_error('source must be "command" or "generate"')
 
         if not value:
             return _tool_error("the source produced no value, so nothing was stored")
+
+        # A redaction marker here means a scrubber ran over the value on its way
+        # to the vault, and what would land is the placeholder rather than the
+        # credential. Tier 2 is disabled on this path precisely to prevent that,
+        # so reaching this is a bug or a caller echoing a secret it injected --
+        # either way the vault must not receive it.
+        if _REDACTION_MARKER.search(value):
+            return _tool_error(
+                "the value contains a redaction marker, so it is a placeholder "
+                "and not a credential. Nothing was stored. If the mint command "
+                "echoes a secret you passed in `secrets`, it is being scrubbed "
+                "before it can be written; emit only the new value.")
 
         fp = self.vault.write(ref, value)
         self.log("store vault=%s ref=%s source=%s fingerprint=%s len=%d"

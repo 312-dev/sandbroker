@@ -27,7 +27,7 @@ import os
 import signal
 import subprocess
 
-from .redact import Redactor
+from .redact import HeuristicRedactor, Redactor
 from .onepassword import VaultError
 
 # Environment variable names the caller may bind a secret to. Restrictive on
@@ -98,8 +98,17 @@ def _validate(command, secrets, timeout, config):
     return timeout or config.default_timeout
 
 
-def run(vault, config, command, secrets=None, timeout=None, cwd=None, stdin=None):
-    """Resolve, execute, scrub. Returns a dict safe to hand back to the agent."""
+def run(vault, config, command, secrets=None, timeout=None, cwd=None, stdin=None,
+        heuristic=True):
+    """Resolve, execute, scrub. Returns a dict safe to hand back to the agent.
+
+    `heuristic` runs the Tier 2 pass over what Tier 1 has already cleaned. It
+    defaults on because a minted credential is invisible to Tier 1, having
+    never been injected. Callers that CONSUME the output inside the broker
+    rather than returning it -- `store`, which writes stdout straight into the
+    vault -- must pass False: scrubbing there would store the placeholder
+    instead of the credential.
+    """
     secrets = secrets or {}
     timeout = _validate(command, secrets, timeout, config)
 
@@ -168,6 +177,18 @@ def run(vault, config, command, secrets=None, timeout=None, cwd=None, stdin=None
     stdout = redactor.clean(out[:cap])
     stderr = redactor.clean(err[:cap])
 
+    # Tier 2 runs second and only over what Tier 1 has already cleaned, so a
+    # declared secret is removed by the exact-match rule and never reaches the
+    # guesser. The two markers stay distinguishable in the output, which is the
+    # point: a reader must always be able to tell a guarantee from a guess.
+    heuristic_hits = 0
+    if heuristic and getattr(config, "heuristic_scan", True):
+        guesser = HeuristicRedactor(
+            entropy_scan=bool(getattr(config, "heuristic_entropy_scan", False)))
+        stdout = guesser.scrub(stdout)
+        stderr = guesser.scrub(stderr)
+        heuristic_hits = guesser.hits
+
     return {
         "exit_code": -1 if timed_out else proc.returncode,
         "stdout": stdout,
@@ -175,6 +196,10 @@ def run(vault, config, command, secrets=None, timeout=None, cwd=None, stdin=None
         "timed_out": timed_out,
         "truncated": truncated,
         "redactions": redactor.hits,
+        # Non-zero means something credential-shaped that the broker never
+        # injected reached the boundary. Unlike `redactions`, that is worth
+        # reporting rather than shrugging at.
+        "heuristic_hits": heuristic_hits,
     }
 
 

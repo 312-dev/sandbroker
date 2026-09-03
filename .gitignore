@@ -21,3 +21,8 @@ __pycache__/
 .mcp.json
 .idea
 .vscode
+
+# Zero-byte bind-mount placeholders a sandboxed agent session creates in-tree.
+# They were committed once by accident; stow-style empties are not project files.
+.claude/agents
+.claude/commands

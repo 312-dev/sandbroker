@@ -35,6 +35,14 @@ DEFAULTS = {
     # and nothing is sent, which `doctor` reports as a problem because a silent
     # alarm is worse than no alarm.
     "notify_command": None,
+    # Tier 2 redaction: guess at credentials the broker never injected, which
+    # Tier 1 structurally cannot see. The prefix pass is cheap and precise, so
+    # it is on. The entropy pass is off because shape alone cannot separate a
+    # 40-hex secret from a git SHA, and redacting commit ids in ordinary output
+    # would cost more than it buys. Turn it on for a rotation workload, where
+    # mangled output is a fair price and an unnoticed minted token is not.
+    "heuristic_scan": True,
+    "heuristic_entropy_scan": False,
     "max_output_bytes": 1048576,
     "default_timeout": 60,
     "max_timeout": 600,

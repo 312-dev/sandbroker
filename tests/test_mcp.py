@@ -48,11 +48,11 @@ class StubAlerter(Alerter):
         return self._delivered
 
 
-def build(tmpdir, delivered=True, vault=None, store_enabled=False):
+def build(tmpdir, delivered=True, vault=None, store_enabled=False, **overrides):
     vaults = {"Dev": {"vault": "Real Dev", "token": "Dev",
                       "store_enabled": store_enabled}}
     cfg = make_config(alerts_dir=os.path.join(tmpdir, "alerts"),
-                      vaults=vaults)
+                      vaults=vaults, **overrides)
     alerter = StubAlerter(cfg, delivered=delivered)
     return Server(vault or FakeVault(), cfg, alerter), alerter
 
