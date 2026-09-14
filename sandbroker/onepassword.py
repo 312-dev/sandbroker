@@ -15,6 +15,7 @@ import json
 import re
 import subprocess
 
+from .childenv import without_session_bus
 from .redact import fingerprint
 
 REF_RE = re.compile(r"^op://(?P<vault>[^/]+)/(?P<item>[^/]+)(?:/(?P<field>.+))?$")
@@ -80,7 +81,10 @@ class Vault:
     def _env(self):
         env = dict(os.environ)
         env["OP_SERVICE_ACCOUNT_TOKEN"] = self._token_value()
-        return env
+        # op reaches for the secret service and will autolaunch a private bus to
+        # find one. See childenv: it needs none of it, and each launch orphans a
+        # dbus-daemon that nothing collects until the unit restarts.
+        return without_session_bus(env)
 
     def _run(self, argv, timeout=None, stdin_data=None):
         """Run one op invocation.

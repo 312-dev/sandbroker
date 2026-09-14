@@ -46,6 +46,7 @@ import os
 import re
 import subprocess
 
+from .childenv import without_session_bus
 from .onepassword import VaultError
 
 REF_RE = re.compile(r"^keeper://(?P<vault>[^/]+)/(?P<item>[^/]+)(?:/(?P<field>.+))?$")
@@ -288,7 +289,7 @@ class Vault:
     def _env(self):
         env = dict(os.environ)
         env["HOME"] = self._state_dir()
-        return env
+        return without_session_bus(env)
 
     def _run(self, command, timeout=None):
         """Run one Commander command and return its stdout.

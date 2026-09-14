@@ -27,6 +27,7 @@ import os
 import signal
 import subprocess
 
+from .childenv import without_session_bus
 from .redact import HeuristicRedactor, Redactor
 from .onepassword import VaultError
 
@@ -40,6 +41,10 @@ RESERVED_ENV = frozenset({
     "PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV", "PWD", "USER", "LOGNAME",
     "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "PYTHONPATH", "PYTHONSTARTUP",
     "OP_SERVICE_ACCOUNT_TOKEN", "OP_CONNECT_TOKEN",
+    # Broker plumbing, not a secret slot. A caller who could rebind this could
+    # hand its commands a working session bus and reinstate the dbus-daemon leak
+    # childenv exists to prevent.
+    "DBUS_SESSION_BUS_ADDRESS",
 })
 
 MAX_SECRETS = 16
@@ -70,7 +75,10 @@ def _base_env():
         "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
     }
     env.pop("OP_SERVICE_ACCOUNT_TOKEN", None)
-    return env
+    # A command is free to invoke op, secret-tool or anything else that wants a
+    # session bus. There is none, and letting one be autolaunched leaks a daemon
+    # per call; see childenv.
+    return without_session_bus(env)
 
 
 def _validate(command, secrets, timeout, config):
