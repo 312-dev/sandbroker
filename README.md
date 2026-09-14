@@ -472,6 +472,15 @@ journalctl -u sandbroker@Dev -f
 bash tests/run.sh              # no dependencies, runs anywhere
 ```
 
+After a deploy, one check the suite cannot make for itself: that the `op` on
+this box still leaves no stray processes behind. It drives a live daemon, so it
+wants a vault nothing else is talking to.
+
+```bash
+python3 tests/live_session_bus_probe.py \
+    /opt/sandbroker/run/dev.sock sandbroker@Dev.service 20
+```
+
 ## History
 
 This is the second design. The first

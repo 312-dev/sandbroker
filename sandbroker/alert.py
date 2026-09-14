@@ -39,6 +39,8 @@ import os
 import subprocess
 import time
 
+from .childenv import without_session_bus
+
 # How stale an open alert has to be before the sweeper pushes it again.
 REPEAT_AFTER = 900  # 15 minutes
 
@@ -68,7 +70,7 @@ class Alerter:
         or re-parsed by a shell. An agent that writes `; rm -rf /` into `detail`
         produces a notification containing that text and nothing more.
         """
-        env = dict(os.environ)
+        env = without_session_bus(dict(os.environ))
         env.update({
             "SANDBROKER_ALERT_ID": str(record.get("id") or ""),
             "SANDBROKER_ALERT_VAULT": str(record.get("vault") or ""),
